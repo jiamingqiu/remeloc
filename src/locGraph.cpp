@@ -18,12 +18,28 @@ List locWindow_cpp(
   // take matrix of coordinates (coord, 1row = 1point)
   // return index of all possible local edges, where "local" defined
   // as difference of coord <= local_reach.
-  // the marginOrder is the order of each column of coord
-  // the marginRank is the rank of each column of coord
+  // the marginOrder is the order of each column of coord, 1 to n
+  // the marginRank is the rank of each column of coord, 1 to n
   // the marginOrder and marginRank should start with 1.
 
   int n = coord.nrow();
   int p = coord.ncol();
+
+  if (
+      Rcpp::min(marginOrder) != 1 || Rcpp::max(marginOrder) != n ||
+        marginOrder.nrow() != n || marginOrder.ncol() != p
+    )
+    Rcpp::stop("check input marginOrder");
+  if (
+      Rcpp::min(marginRank) != 1 || Rcpp::max(marginRank) != n ||
+        marginRank.nrow() != n || marginRank.ncol() != p
+  )
+    Rcpp::stop("check input marginRank");
+  if (Rcpp::min(local_reach) < 0 || local_reach.size() != p)
+    Rcpp::stop("check input local_reach");
+
+  marginOrder = marginOrder - 1;
+  marginRank = marginRank - 1;
 
   // Nullable<IntegerMatrix> marginOrder = R_NilValue,
   // Nullable<IntegerMatrix> marginRank = R_NilValue
@@ -47,9 +63,6 @@ List locWindow_cpp(
   //   }
   // }
 
-  marginOrder = marginOrder - 1;
-  marginRank = marginRank - 1;
-
   // figure out local neighborhood
   List res(n);
   // LogicalMatrix mat_nbhd(n, p);
@@ -62,6 +75,10 @@ List locWindow_cpp(
   bool keep_pnt;
 
   for (int i = 0; i < n; i++) {
+
+    if (i % 50000 == 0) { // for interrupt in case n very large
+      Rcpp::checkUserInterrupt();
+    }
 
     //  for the i-th point, for unique pairs, only consider larger than i
     std::fill(tm_nbhd.begin(), tm_nbhd.begin() + i, FALSE);

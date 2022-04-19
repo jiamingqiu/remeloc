@@ -34,46 +34,10 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// orderCpp
-IntegerVector orderCpp(NumericVector x);
-RcppExport SEXP _remeloc_orderCpp(SEXP xSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< NumericVector >::type x(xSEXP);
-    rcpp_result_gen = Rcpp::wrap(orderCpp(x));
-    return rcpp_result_gen;
-END_RCPP
-}
-// orderStable
-IntegerVector orderStable(NumericVector x);
-RcppExport SEXP _remeloc_orderStable(SEXP xSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< NumericVector >::type x(xSEXP);
-    rcpp_result_gen = Rcpp::wrap(orderStable(x));
-    return rcpp_result_gen;
-END_RCPP
-}
-// rankCpp
-IntegerVector rankCpp(NumericVector x);
-RcppExport SEXP _remeloc_rankCpp(SEXP xSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< NumericVector >::type x(xSEXP);
-    rcpp_result_gen = Rcpp::wrap(rankCpp(x));
-    return rcpp_result_gen;
-END_RCPP
-}
 
 static const R_CallMethodDef CallEntries[] = {
     {"_remeloc_rcpp_hello", (DL_FUNC) &_remeloc_rcpp_hello, 0},
     {"_remeloc_locWindow_cpp", (DL_FUNC) &_remeloc_locWindow_cpp, 4},
-    {"_remeloc_orderCpp", (DL_FUNC) &_remeloc_orderCpp, 1},
-    {"_remeloc_orderStable", (DL_FUNC) &_remeloc_orderStable, 1},
-    {"_remeloc_rankCpp", (DL_FUNC) &_remeloc_rankCpp, 1},
     {NULL, NULL, 0}
 };
 

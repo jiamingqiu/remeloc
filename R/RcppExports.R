@@ -9,15 +9,3 @@ locWindow_cpp <- function(coord, local_reach, marginOrder, marginRank) {
     .Call(`_remeloc_locWindow_cpp`, coord, local_reach, marginOrder, marginRank)
 }
 
-orderCpp <- function(x) {
-    .Call(`_remeloc_orderCpp`, x)
-}
-
-orderStable <- function(x) {
-    .Call(`_remeloc_orderStable`, x)
-}
-
-rankCpp <- function(x) {
-    .Call(`_remeloc_rankCpp`, x)
-}
-

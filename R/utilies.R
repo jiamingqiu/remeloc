@@ -1,7 +1,7 @@
 # utilities
 
 vecQuadIdx <- function(d){
-  # genenrate combinations of seq(d) taken 2 at a time
+  # generate combinations of seq(d) taken 2 at a time
   # with replacement.
   # Returns: a 2 X d(d-1)/2 where each column is a
   # combination.
@@ -132,14 +132,19 @@ allEdge <- function(coord, local.reach){
     local.reach <- rep(local.reach, ncol(coord))
 
   res <- locWindow_cpp(
-    coord, local.reach, apply(coord, 2, order), apply(coord, 2, rank)
+    coord, local.reach,
+    apply(coord, 2, order), apply(coord, 2, rank, ties.method = 'first')
   ) # now it is a list
 
+  # browser();QWER
   # make into a matrix
   tm <- unlist(res)
-  mat <- matrix(0, nrow = length(tm), ncol = 2)
+  mat <- matrix(0L, nrow = length(tm), ncol = 2) # 0L to keep integer type
   mat[, 1] <- rep(seq_along(res), times = sapply(res, length))
   mat[, 2] <- tm
+
+  # # drop edge pointing to self
+  # mat <- mat[mat[, 1] != mat[, 2], ]
 
   return(mat)
 

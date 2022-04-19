@@ -1,0 +1,10 @@
+*
+!*/
+!*.R
+!*.cpp
+!DESCRIPTION
+!.gitignore
+!*.Rmd
+!*.tex
+!*.bib
+.Rproj.user
