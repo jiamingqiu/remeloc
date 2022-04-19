@@ -66,9 +66,95 @@ quadForm <- function(mat.x, mat.a){
   return(res)
 }
 
+# sigmoid function and its inverse
 sigmoid.f <- function(x){
   1 / (1 + exp(-x))
 }
 sigmoid.f.inv <- function(x){
   log(x / (1 - x))
+}
+
+#' Random generator for a local graph
+#'
+#' @param n number of edge to generate
+#' @param coord matrix of coordinates, one row for one point
+#' @param local.reach approximate size of local neighborhood
+#' (treated as Euclidean space)
+#'
+#' @return a n-by-2 matrix for indices of edge, one row for one edge.
+#' @details will based on coordinates, i.e., no edge if coordinates are too far
+#' apart, in the sense that difference in coord is greater than \code{range}.
+#' @export
+#'
+#' @examples TBD
+genGraph <- function(n, coord, local.reach){
+
+  if(!is.matrix(coord))
+    stop('need more than 1 points.')
+  stopifnot(all(local.reach >= 0))
+  stopifnot(length(local.reach) == 1 | length(local.reach) == ncol(coord))
+  stopifnot(n > 0)
+
+  coord.pnts <- coord
+
+  # index of all possible pairs within range of local.reach
+
+  idx.pair <- t(utils::combn(nrow(coord.pnts), 2))
+  idx.dist <- idx.dist[
+    sample(nrow(idx.dist), size = 25000),
+  ]
+
+  return(n * range)
+}
+
+
+#' get all possible local edge
+#'
+#' @param coord matrix of coordinates, one row for one point
+#' @param local.reach approximate size of local neighborhood
+#' (treated as Euclidean space)
+#'
+#' @return a matrix for indices of edge, one row for one edge.
+#' @details will based on coordinates, i.e., no edge if coordinates are too far
+#' apart, in the sense that difference in coord is greater than \code{range}.
+#' @export
+#'
+#' @examples TBD
+allEdge <- function(coord, local.reach){
+
+  stopifnot(all(is.finite(coord)) & all(is.finite(local.reach)))
+
+  if(!is.matrix(coord))
+    stop('need more than 1 point as multi-row matrix, check input type.')
+  stopifnot(all(local.reach >= 0))
+  stopifnot(length(local.reach) == 1 | length(local.reach) == ncol(coord))
+  if(length(local.reach) == 1)
+    local.reach <- rep(local.reach, ncol(coord))
+
+  res <- locWindow_cpp(
+    coord, local.reach, apply(coord, 2, order), apply(coord, 2, rank)
+  ) # now it is a list
+
+  # make into a matrix
+  tm <- unlist(res)
+  mat <- matrix(0, nrow = length(tm), ncol = 2)
+  mat[, 1] <- rep(seq_along(res), times = sapply(res, length))
+  mat[, 2] <- tm
+
+  return(mat)
+
+#   # index of all possible pairs within range of local.reach
+#   mat.order <- apply(coord, 2, order)
+#   mat.rank <- apply(coord, 2, rank)
+#
+#   res <- lapply(seq(nrow(mat.order)), function(i){
+#     idx.nbhd <- mat.rank[i, ]
+#     idx.nbhd <- pmin(n.pnts, pmax(1, idx.nbhd))
+#
+#   })
+#   idx.pair <- t(utils::combn(nrow(coord.pnts), 2))
+#   idx.dist <- idx.dist[
+#     sample(nrow(idx.dist), size = 25000),
+#   ]
+
 }
