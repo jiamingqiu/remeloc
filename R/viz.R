@@ -116,7 +116,8 @@ plotGraph <- function(coord, edge, get.plt.dat = F, max.n.edge = 500){
     ) +
     # ggplot2::scale_color_gradientn(colours = hcl.colors(10, 'Zissou 1')) +
     ggplot2::facet_grid(
-      rows = ggplot2::vars('plt.y'), cols = ggplot2::vars('plt.x'),
+      # rows = ggplot2::vars('plt.y'), cols = ggplot2::vars('plt.x'),
+      as.formula('plt.y ~ plt.x'),
       labeller = ggplot2::label_both
     )
 

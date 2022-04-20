@@ -2,10 +2,11 @@ test_that("locWindow_cpp and allEdge", {
 
   # error handling safe guide (especially marginOrder and marginRank)
   set.seed(1)
-  coord <- matrix(runif(2 * 10^3), ncol = 2)
+  d <- 3
+  coord <- matrix(runif(d * 2000), ncol = d)
   marginOrder = apply(coord, 2, order)
   marginRank = apply(coord, 2, rank)
-  loc.reach <- rep(1, 2)
+  loc.reach <- rep(1, d)
   expect_error(
     locWindow_cpp(coord, 1, marginOrder, marginRank)
   )
@@ -15,14 +16,31 @@ test_that("locWindow_cpp and allEdge", {
   expect_error(
     locWindow_cpp(coord, loc.reach, marginOrder, head(marginRank))
   )
+
+  # # # R is faster......
+  # microbenchmark::microbenchmark(list = alist(
+  #   cpp = locWindow_cpp(coord, rep(0.1, d), marginOrder, marginRank),
+  #   R = allEdge(coord, 0.1)
+  # ), times = 10L)
+
   # if not integer, will become integer, though extremely risky
   # locWindow_cpp(
   #   coord, loc.reach, pmin(marginOrder + 0.5, nrow(coord)), marginRank
   # )
 
   ## checking correctness of results
+  res.cpp <- locWindow_cpp(coord, rep(0.1, d), marginOrder, marginRank)
+  tm <- unlist(res.cpp)
+  mat.cpp <- matrix(0L, nrow = length(tm), ncol = 2) # 0L to keep integer type
+  mat.cpp[, 1] <- rep(seq_along(res.cpp), times = sapply(res.cpp, length))
+  mat.cpp[, 2] <- tm
+  expect_identical(data.frame(mat.cpp), data.frame(allEdge(coord, 0.1)))
+
   coord <- matrix(0, nrow = 5, ncol = 2)
   coord[-1, ] <- as.matrix(expand.grid(v1 = c(-1, 1), v2 = c(-1, 1)))
+  # allEdge(coord, 1)
+  # plotGraph(coord, allEdge(coord, 1), T) %>%
+  #   purrr::map(~ tibble::as_tibble(.x ))
   # plot(coord)
 
   # check if ties.method = 'first' is as desired (for stable sort only)
@@ -85,3 +103,5 @@ test_that("locWindow_cpp and allEdge", {
 # coord <- matrix(runif(2 * 10^4), ncol = 2)
 # plot(coord)
 # microbenchmark::microbenchmark(allEdge(coord, 0.1), times = 10L) # ~ 3s per
+#
+# tst_cpp(c(T, T, F), c(F, T, F))
