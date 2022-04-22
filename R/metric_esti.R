@@ -1,13 +1,368 @@
 # core functions for metric estimation
 
+
+#' Local Estimation of Metric Tensor
+#' @description
+#'   Local estimation of metric tensor given squared distance,
+#'   binary censoring, or comparing edges responses. As a high-level wrapper
+#'   for \code{locMetric}.
+#' @param target matrix of the coordinate of target points (1 row = 1 point)
+#' @param resp data.frame or matrix of 3 or 5 columns with rows of observations
+#' @param obsv.coord coordinate matrix of observed points, 1 row = 1 point
+#' @param optns a list of control options.
+#'
+#' @return a list, \code{"metric"} containing estimated metric tensor matrices
+#' and \code{"optns"}, formatted local observations (\code{"loc.obsv"}) will be
+#' provided if requested.
+#'
+#' @details For \code{resp},
+#'    its first column is response, while 2nd to last columns are index of pairs
+#'    of points. For example, a row of (100, 5, 6) means the observed
+#'    response between the 5th and 6th points (coordinates in 5th and 6th row of
+#'    \code{obsv.coord} is 100; a row of (1, 5, 6, 6, 8) means (only in the
+#'    comparing edges cases) the response for comparing edge 5-6 and edge 6-8 is
+#'    1.
+#'    \cr
+#'    If requested by setting \code{optns$get.loc.obsv} as \code{TRUE}, the
+#'    returned value have an additional element for local observations (edges),
+#'    which is also a named list named after row indices of \code{target}, whose
+#'    elements are matrices with columns corresponding to indices of edges
+#'    endpoints, response, and difference in coordinates.
+#'    \cr
+#'    Possible control options are
+#'    \describe{
+#'    \item{\code{local.reach}}{
+#'        positive numbers defining range of local neighborhood near
+#'        target points.
+#'    }
+#'    \item{\code{n.local}}{
+#'        max and min number of local responses to use. Missing then default to
+#'        \code{c(10, 1000)}. If provided only one value, will use as max.
+#'    }
+#'    \item{\code{method.trim}}{
+#'        \code{"random"}(default)/\code{"proximity"}, method to select local
+#'        responses, either random, or by proximity to target points. Here
+#'        distance is taken assuming points are in Euclidean space regardless of
+#'        truth.
+#'    }
+#'    \item{\code{get.loc.obsv}}{
+#'        \code{FALSE}(default)/\code{TRUE}, whether to return local
+#'        observations used per target point.
+#'    }
+#'    \item{\code{locMetric}}{
+#'        list passed to \code{optns} argument in \code{locMetric} function.
+#'        Note that \code{optns$locMetric$type} will be set based on best guess
+#'        here if unspecified.
+#'    }
+#'    }
+#'
+#' @export
+#'
+#' @family {locMetric}
+#' @examples TBD
+estiMetric <- function(target, resp, obsv.coord, optns = list()){
+  # function estimating metric tensor at target points
+  # args:
+  #   target: coordinate matrix of the target points (1 row = 1 point)
+  #   obsv.coord: coordinate matrix of observed points, 1 row = 1 point
+  #   resp: a data.frame or matrix of 3 or 5 columns with 1 row for 1
+  #     observed pair where 2nd--last columns are index of pairs of points and
+  #     the first is response, for example, a row of (100, 5, 6) means the
+  #     observed response between the 5th and 6th points (coordinates in 5th
+  #     and 6th row of obsv.coord) is 100; a row of (1, 5, 6, 6, 8) means (only
+  #     in the comparing edges cases) the response for comparing edge 5-6 and
+  #     edge 6-8 is 1.
+  #     Note that the 2nd column should always be no smaller than the 1st.
+  #     (TBD: Duplication will be checked. )
+  #   optns: a list of control options.
+  #     local.reach: maximum difference in coordinates for obsv.coord to target
+  #       to still be consider in local neighbourhood of the target point.
+  #     n.local: min and max number of points to be included in local nbhd.
+  #     method.trim: "random"/"proximity", how to select local edges near target
+  #     get.loc.obsv: whether to return local observations used
+  #     locMetric: list passed to optns argument in locMetric function
+  #     (TBD: check11: FALSE/TRUE(default), check resp for duplication.)
+  # return: a list of estimated metric tensor matrices
+
+  # DEBUG ONLY
+  # browser();
+  # env.dev <- new.env()
+  # local(envir = env.dev, {
+  #   optns <- list()
+  #   d <- 3
+  #   target <- rep(0, d)
+  #   manifold <- spaceEuclidean(d)
+  #   set.seed(1)
+  #   obsv.coord <- manifold$genPnt(10000)
+  #   idx.edge <- allEdge(obsv.coord, local.reach = 0.1)
+  #   idx.edge <- idx.edge[idx.edge[, 1] != idx.edge[, 2], , drop = F]
+  #   resp <- cbind(manifold$dist(
+  #     obsv.coord[idx.edge[, 1], ], obsv.coord[idx.edge[, 2], ]
+  #   ) ^ 2, idx.edge)
+  #   browser();QWER
+  #   plotGraph(obsv.coord, resp[, -1], max.n.edge = 50)
+  # })
+  # local(envir = env.dev, browser())
+  # END DEBUG ONLY
+
+  ### sanity
+  stopifnot(is.matrix(obsv.coord))
+  stopifnot(all(is.finite(obsv.coord)))
+  d <- ncol(obsv.coord)
+
+  # check distance
+  stopifnot(ncol(resp) %in% c(3, 5))
+  stopifnot(all(is.finite(resp)) & all(resp >= 0))
+
+  # check indices
+  stopifnot(all(
+    resp[, -1] >= 1 & resp[, -1] <= nrow(obsv.coord)
+  ))
+  stopifnot(all.equal(
+    resp[, -1],
+    matrix(as.integer(resp[, -1]), ncol = ncol(resp[, -1]))
+  ))
+
+  # check target
+  if(!is.matrix(target)){
+    stopifnot(length(target) == d)
+    target <- matrix(target, nrow = 1)
+  }else{
+    stopifnot(ncol(target) == d)
+  }
+
+  # check options
+  if(is.null(optns$local.reach)){
+    # approx. 1000 pnts in each nbhd, if target & obsv unif in a square
+    optns$local.reach <-
+      abs( prod( apply( obsv.coord, 2, function(x) { diff(range(x)) }) ) )  /
+      (nrow(obsv.coord) / 1000)
+  }
+  if(is.null(optns$n.local)){
+    optns$n.local <- c(10, 1000)
+  }
+  if(length(optns$n.local) == 1){
+    optns$n.local <- c(1, optns$n.local)
+  }
+  stopifnot(all(optns$n.local >= 1))
+  if(is.null(optns$get.loc.obsv))
+    optns$get.loc.obsv <- FALSE
+  stopifnot(
+    length(optns$get.loc.obsv) == 1 & inherits(optns$get.loc.obsv, 'logical')
+  )
+  if(is.null(optns$locMetric)){
+    tm <- list()
+    if( length(unique(resp[, 1])) > 2 ){
+      if(ncol(resp) != 3) stop(
+        'input distance, but with edge comparison format.'
+      )
+      tm$type <- 'distance'
+    }else if( ncol(resp) == 3 ){
+      tm$type <- 'thresholding'
+    }else{
+      tm$type <- 'compare'
+    }
+    optns$locMetric <- tm
+  }
+  optns$method.trim <- match.arg(optns$method.trim, c("random", "proximity"))
+
+  local.reach <- optns$local.reach
+  max.n.local <- max(optns$n.local)
+  min.n.local <- min(optns$n.local)
+
+  # check for duplication, later
+  # df.resp <- as.data.frame(resp)
+  # names(df.resp) <- c('idx.pnt1', 'idx.pnt2', 'dist')
+  # stopifnot(all(df.resp[, seq(2)] >= 1))
+  # stopifnot(all(df.resp[, seq(2)] <= nrow(obsv.coord)))
+  # if(!all(with(df.resp, idx.pnt1 != idx.pnt2))){
+  #   warning('Dropping pairs whose two endpoints are the same point.')
+  #   df.resp <- df.resp[with(df.resp, idx.pnt1 != idx.pnt2), ]
+  # }
+  # if(is.null(optns$check11)){
+  #   optns$check11 <- TRUE
+  # }
+  # # trim ls.dist and ls.nbhd so 1 pair <-1:1-> 1 row
+  # if(optns$check11){
+  #   df.resp$idx.pair <- with(
+  #     df.resp,
+  #     sprintf(
+  #       '%s.%s',
+  #       pmin.int(idx.pnt1, idx.pnt2),
+  #       pmax.int(idx.pnt1, idx.pnt2)
+  #     )
+  #   )
+  #   idx.dupp <- base::duplicated(df.resp$idx.pair)
+  #   if(any(idx.dupp)){
+  #     pair.dupp <- df.resp$idx.pair[idx.dupp]
+  #     df.dupp <- df.resp[df.resp$pair %in% pair.dupp, ]
+  #     for(s.pair in pair.dupp){ # check uniqueness of distance
+  #       stopifnot(length(unique(
+  #         (df.dupp$dist)[df.dupp$pair == s.pair]
+  #       )) == 1)
+  #     }
+  #     df.resp <- df.resp[!idx.dupp, ]
+  #   }
+  #   idx.mat <- stringr::str_split_fixed(df.resp$idx.pair, '\\.', n = 2)
+  #   df.resp$idx.pnt1 <- as.integer(idx.mat[, 1])
+  #   df.resp$idx.pnt2 <- as.integer(idx.mat[, 2])
+  #   df.resp <- df.resp[with(df.resp, idx.pnt1 < idx.pnt2), ]
+  # }else{
+  #   # # trim anyway. well, can be problematic if doing so
+  #   # df.resp <- df.resp[with(df.resp, idx.pnt1 <= idx.pnt2), ]
+  #   # stopifnot(all(with(df.resp, idx.pnt1 < idx.pnt2))) # may be not needed?
+  #   warning('Potential duplication in df.resp not checked.')
+  # }
+
+
+  # for faster slicing later, we translate df.resp into list, for the record,
+  # slicing list is 10 times faster than slicing data.frame, and slicing list
+  # by its index is 100 times faster than slicing by its name. We compute diff
+  # of coord here so as to avoid it being computed multiple times in different
+  # local nbhd when estimating locally, especially local.reach is large creating
+  # overlaps, and when comparing multiple pairs.
+
+  df.resp <- data.frame(resp)
+  names(df.resp) <- c('resp', outer(
+    seq(2), seq(ncol(df.resp) %/% 2),
+    function(x, y) sprintf('p%se%s', x, y)
+  ))
+  df.resp$idx.dist <- seq(nrow(df.resp))
+  # next: to list, essentially a faster slicing index by split into list
+  # this template of list is used for faster slicing later
+  template.ls <- rep(list(NULL), nrow(obsv.coord))
+  names(template.ls) <- seq_along(template.ls)
+
+  ls.graph <- lapply(seq(ncol(resp) %/% 2), function(idx.edge.set) {
+    # browser();QWER
+    mat.edge <- as.matrix(df.resp[, 1 + seq(2) + 2 * (idx.edge.set - 1)])
+    if(length(unique(mat.edge[, 1]))> length(unique(mat.edge[, 2]))){
+      # switch index columns to put the least varying first
+      mat.edge <- mat.edge[, c(2, 1)]
+    }
+    tm <- list(
+      mat.edge, df.resp$idx.dist, df.resp$resp,
+      deltaCoord(obsv.coord, mat.edge, return.format = 'keep')
+    )
+    tm <- do.call(cbind, tm) # this is fast enough
+    colnames(tm) <- c(
+      'p1', 'p2', 'idx.dist', 'resp', sprintf('coordd.%s', seq(d))
+    )
+
+    # split into list
+    tm <- split.data.frame(tm, tm[, 'p1'])
+    res <- template.ls
+    res[names(tm)] <- tm
+    return(res)
+  })
+  # object.size(ls.graph) / 1024 ^ 2
+
+  ### use diff in coord to determine local nbhd of target points
+  target.nbhd <- locWindow(target, obsv.coord, local.reach)
+
+  ## then two ways to subset edges: random or "proximity"
+  if(optns$method.trim == 'proximity'){
+    # pseudo distance to target points
+    proximity <- lapply(seq_along(target.nbhd), function(idx.target){
+      # browser();QWER
+      tm <- obsv.coord[target.nbhd[[idx.target]], ]
+      tm <- tm - target[idx.target, col(tm)]
+      return(rowSums(tm ^ 2))
+    })
+    names(proximity) <- names(target.nbhd)
+    target.nbhd <- base::mapply(function(nbhd, prox){
+      # browser();QWER
+      res <- nbhd[head(order(prox), max.n.local)] # now ordered by proximity
+      res <- sort(res) # now by smaller indices to larger ones
+      return(res)
+    }, nbhd = target.nbhd, prox = proximity, SIMPLIFY = FALSE)
+  }else{
+    target.nbhd <- lapply(target.nbhd, function(x) {
+      res <- sample(x, size = min(length(x), max.n.local), replace = F)
+      return(sort(res))
+    })
+  }
+  # slice the observations used for local estimation
+  loc.obsv <- lapply(target.nbhd, function(nbhd){
+    # browser();QWER
+
+    loc.graph <- lapply(ls.graph, function(x) x[as.numeric(nbhd)])
+    loc.graph <- lapply(loc.graph, function(x) {
+      # browser();QWER
+      res <- x[!sapply(x, is.null)]
+      res <- lapply(res, function(mat) mat[mat[, 'p2'] %in% nbhd, , drop = F])
+      res <- do.call(rbind, res)
+      return(res)
+    })
+    if(length(loc.graph) == 2){
+      # if comparing edges, there will be 2 lists, need to intersect
+      idx.yes <- base::intersect(
+        loc.graph[[1]][, 'idx.dist'], loc.graph[[2]][, 'idx.dist']
+      )
+      loc.graph <- lapply(loc.graph, function(mat){
+        res <- mat[mat[, 'idx.dist'] %in% idx.yes, , drop = F]
+        res <- res[order(res[, 'idx.dist']), , drop = F]
+        res
+      })
+      return(loc.graph)
+    }else{
+      return(loc.graph[[1]])
+    }
+
+  })
+
+  # check if densely sampled near targets
+  if(length(ls.graph) == 2)
+    n.loc.obsv <- sapply(loc.obsv, function(x) nrow(x[[1]]))
+  else
+    n.loc.obsv <- sapply(loc.obsv, nrow)
+  if(!all(n.loc.obsv >= min.n.local)) {
+    warning(sprintf(
+      'samples are not dense enough near %s target points.',
+      sum(n.loc.obsv < min.n.local)
+    ))
+  }
+
+  # estimating for each targetd points
+  ls.res <- lapply(loc.obsv, function(input){
+    if(is.list(input)){
+      # if comparing
+      ls.args <- list(
+        y = input[[1]][, 'resp'],
+        coord.diff = lapply(input, function(x) x[, -seq(4), drop = F])
+      )
+    }else{
+      ls.args <- list(
+        y = input[, 'resp'],
+        coord.diff = input[, -seq(4), drop = F]
+      )
+    }
+    ls.args$optns <- optns$locMetric
+    return(do.call(locMetric, ls.args))
+  })
+
+  # return list of local results: estimated metric tensor and obsv
+  loc.res <- list(
+    metric = lapply(ls.res, `[[`, 'mat.g'),
+    optns = optns
+  )
+  if(optns$get.loc.obsv)
+    loc.res$obsv <- loc.obsv
+
+  return(loc.res)
+
+}
+
+
 #' Local Estimation of Metric Tensor
 #' @description
 #'   Local estimation of Riemannian metric tensor with noisy geodesic distances.
 #' @param y
 #'   array of response
 #' @param coord.diff
-#'   difference of coordinates, one row is one pair of points.
-#'   Number of rows equal to length of \code{y}.
+#'   matrix of difference of coordinates corresponding to edges, one row is one
+#'   edge (connecting a pair of points). Number of rows = length of \code{y}.
+#'   If comparing edges, then a list of 2 such matrices.
 #' @param optns
 #'   a list of control options.
 #'
@@ -40,10 +395,12 @@
 #'     Will default to \code{FALSE} unless \code{type = "thresholding"}.
 #'    }
 #'   \item{\code{...}}{
-#'     passed to \code{glm.fit}, if non, will use a simple QR-solve for OLS.
-#'     Default: missing for \code{type = "distance"};
-#'       \code{binomial(link = "logit")} for
-#'       \code{type = c("thresholding", "compare")}.
+#'     passed to \code{glm.fit}, if no \code{family} specified, will use a
+#'     simple QR-solve for OLS. One can also specify weight when using
+#'     \code{glm.fit}. Default:
+#'     missing for \code{type = "distance"};
+#'     \code{binomial(link = "logit")} for
+#'        \code{type = c("thresholding", "compare")}.
 #'    }
 #' }
 #'
@@ -52,13 +409,15 @@
 #' for thresholding type, \code{y} is binary vector, modeled by
 #' \deqn{P(y_i = 1 | D_i) = g^{-1}(\beta_0 + D_i^2),}
 #' for compare type, \code{y} is binary vector, modeled by
-#' \deqn{P(y_{ij} = 1 | D_i) = g^{-1}(\beta_0 + D_i^2 - D_j^2),}
+#' \deqn{P(y_{ij} = 1 | D_i, D_j) = g^{-1}(\beta_0 + D_i^2 - D_j^2),}
 #' where
 #' \eqn{y_i} is the ith response, \eqn{D_i} is the ith pair of geodesic distance
 #' corresponding to ith row of \code{coord.diff},
 #' \eqn{g} is the link function specified by \code{optns$family} (default to
 #' Gaussian if missing), \eqn{\beta_0} is intercept (optional).
 #' @export
+#'
+#' @family {locMetric}
 #'
 #' @examples
 #' ## Euclidean space
@@ -79,16 +438,16 @@
 #' arr.thre.itcpt <- rbinom(length(arr.dist), 1, prob = prob.thre.itcpt)
 #'
 #' # noiseless observation
-#' locMetric.g(arr.dist ^ 2, coord.diff)$mat.g
+#' locMetric(arr.dist ^ 2, coord.diff)$mat.g
 #'
 #' # normal noise (after squared)
-#' locMetric.g(
+#' locMetric(
 #'   arr.dist ^ 2 + rnorm(length(arr.dist), sd = sd(arr.dist) / 50),
 #'   coord.diff
 #' )$mat.g
 #'
 #' # binary thresholding
-#'  locMetric.g(
+#'  locMetric(
 #'    arr.thre, coord.diff
 #'    , optns = list(type = 't', intercept = FALSE)
 #'  )$mat.g
@@ -107,19 +466,19 @@
 #' arr.comp <- rbinom(length(prob.comp), 1, prob = prob.comp)
 #'
 #' # comparing distance
-#' locMetric.g(
+#' locMetric(
 #'   arr.comp, ls.coord.diff
 #'   , optns = list(type = 'comp', intercept = FALSE)
 #' )$mat.g
 #' # comparing distance w/ intercept
-#' res.itcpt <- locMetric.g(
+#' res.itcpt <- locMetric(
 #'   arr.comp, ls.coord.diff
 #'   , optns = list(type = 'comp', intercept = TRUE)
 #' )
 #' res.itcpt$mat.g
 #' # the fitted intercept should be close to 0
 #' res.itcpt$loc.fit$coefficients[1]
-locMetric.g <- function(y, coord.diff, optns = list()){
+locMetric <- function(y, coord.diff, optns = list()){
   # local polynomial estimating metric tensor.
   # browser()
 
@@ -164,7 +523,7 @@ locMetric.g <- function(y, coord.diff, optns = list()){
   }
 
   if(!is.null(optns$family)){# if using glm.fit with general family
-    loc.fit <- do.call(glm.fit, c(
+    loc.fit <- do.call(stats::glm.fit, c(
       list(x = mat.v, y = y),
       optns[-idx.optns.notglm]
     ))

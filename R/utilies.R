@@ -13,67 +13,6 @@ vecQuadIdx <- function(d){
   ))
 }
 
-#' Vectorization of terms in quadratic form.
-#' @md
-#' @param x an array or a matrix
-#'
-#' @return a matrix with each row being vectorized quadratic form.
-#'
-#' @details Columns will be in the order of
-#'   \eqn{x_1^2, \dots, x_d^2, x_1x_2, \dots, x_{d-1}x_d}.
-#' @export
-#'
-#' @examples TBD
-vecQuad <- function(x){
-  # vectorization of quadratic form
-  # x: an array or a matrix
-  # return: a matrix
-  if(!is.matrix(x))
-    x <- matrix(x, nrow = 1)
-  d <- ncol(x)
-  if(is.null(colnames(x))){
-    colnames(x) <- sprintf('x%s', seq(d))
-  }
-  # index and names of vectorized result
-  idx.col <- vecQuadIdx(d)
-  nm.col <- colnames(x)
-  nm.col <- sprintf(
-    '%s*%s',
-    nm.col[idx.col[1, ]],
-    nm.col[idx.col[2, ]]
-  )
-  res <- x[, idx.col[1, ], drop=FALSE] * x[, idx.col[2, ], drop=FALSE]
-  colnames(res) <- nm.col
-  return(res)
-}
-
-#' Quadratic form
-#'
-#' @param mat.x a matrix
-#' @param mat.a symmetric matrix of coefficients.
-#'
-#' @return a ncol(mat.x) X ncol(mat.x) matrix.
-#' @details compute \code{t(mat.x) %*% mat.a %*% mat.x}, so the (i, j) element
-#' is \code{mat.x[, i] %*% mat.a %*% mat.x[, j]}.
-#' @export
-#'
-#' @examples TBD
-#' @md
-quadForm <- function(mat.x, mat.a){
-  # compute t(mat.x) %*% mat.a %*% mat.x
-  res <- crossprod(mat.x, mat.a)
-  res <- tcrossprod(res, t(mat.x))
-  return(res)
-}
-
-# sigmoid function and its inverse
-sigmoid.f <- function(x){
-  1 / (1 + exp(-x))
-}
-sigmoid.f.inv <- function(x){
-  log(x / (1 - x))
-}
-
 #' Random generator for a local graph
 #'
 #' @param n number of edge to generate
@@ -86,7 +25,12 @@ sigmoid.f.inv <- function(x){
 #' apart, in the sense that difference in coord is greater than \code{range}.
 #' @export
 #'
-#' @examples TBD
+#' @examples
+#' set.seed(1)
+#' d <- 3
+#' coord <- matrix(runif(d * 50), ncol = d)
+#' graph <- genGraph(10, coord, local.reach = 0.5)
+#' plotGraph(coord, graph)
 genGraph <- function(n, coord, local.reach){
 
   if(!is.matrix(coord))
@@ -98,13 +42,13 @@ genGraph <- function(n, coord, local.reach){
   coord.pnts <- coord
 
   # index of all possible pairs within range of local.reach
-
-  idx.pair <- t(utils::combn(nrow(coord.pnts), 2))
-  idx.dist <- idx.dist[
-    sample(nrow(idx.dist), size = 25000),
+  all.edge <- allEdge(coord, local.reach)
+  all.edge <- all.edge[all.edge[, 1] != all.edge[, 2], ]
+  res <- all.edge[
+    sample(nrow(all.edge), size = n), , drop = F
   ]
 
-  return(n * range)
+  return(res)
 }
 
 
@@ -117,6 +61,7 @@ genGraph <- function(n, coord, local.reach){
 #' @return a 2-cols matrix for indices of edge, one row for one edge.
 #' @details based on coordinates, no edge if coordinates are too far apart, in
 #' the sense that difference in coord is greater than \code{local.reach}.
+#' Note that self-loop will be included.
 #' @export
 #'
 #' @examples
@@ -184,6 +129,7 @@ allEdge <- function(coord, local.reach){
   return(mat)
 }
 
+# the R version is faster when there is larger number of points
 # allEdgeCpp <- function(coord, local.reach){
 #
 #   stopifnot(all(is.finite(coord)) & all(is.finite(local.reach)))
@@ -227,3 +173,256 @@ allEdge <- function(coord, local.reach){
 #   #   ]
 #
 # }
+
+#' change format of a graph (edge)
+#'
+#' @param graph a list or matrix of edges of the graph
+#' @param format \code{"matrix"} or \code{"list"}, the target format, if
+#' missing, will toggle the input type, i.e., change \code{matrix} input to
+#' \code{list}, and vise versa
+#' @param ... additional argument passed to \code{edgeMat2List}
+#'
+#' @return the reformatted edges of the graph
+#' @export
+#' @family {loc_graph}
+#' @examples
+#' set.seed(1)
+#' d <- 2
+#' coord <- matrix(runif(d * 10), ncol = d)
+#' edge.mat <- locWindow(c(0, 0), coord, 0.5, 'matrix')
+#' edge.list <- locWindow(c(0, 0), coord, 0.5, 'list')
+#' identical(formatGraph(edge.mat), edge.list)
+#' identical(formatGraph(edge.list), edge.mat)
+formatGraph <- function(graph, format, ...){
+
+  stopifnot( inherits(graph, c('matrix', 'list')) )
+  if(missing(format)){
+    format <- setdiff(c('matrix', 'list'), class(graph))
+  }else{
+    format <- match.arg(format, c('matrix', 'list'))
+    if(inherits(graph, format)) return(graph)
+  }
+
+  if(format == 'matrix')
+    return(edgeList2Mat(graph))
+  else
+    return(edgeMat2List(graph, ...))
+}
+
+#' translate a matrix of graph edges into list
+#'
+#' @param edge.mat a 2-col matrix of graph edges (pair of indices)
+#' @param names_from which of the 2 column to go to list name,
+#' either integer index or character for column name.
+#'
+#' @return a named list whose elements are indices of nodes connected to the
+#' node corresponding to the list name.
+#'
+#' @export
+#' @family {loc_graph}
+#' @examples
+#' set.seed(1)
+#' d <- 2
+#' coord <- matrix(runif(d * 10), ncol = d)
+#' edge.mat <- locWindow(c(0, 0), coord, 0.5, 'matrix')
+#' edge.list <- locWindow(c(0, 0), coord, 0.5, 'list')
+#' identical(edgeMat2List(edge.mat), edge.list)
+edgeMat2List <- function(edge.mat, names_from = NULL){
+  # translate a matrix of graph edges into list
+  # basically a wrapper around split and build-your-own-wheel tidyr::nest
+
+  stopifnot(is.matrix(edge.mat))
+  stopifnot(ncol(edge.mat) == 2)
+
+  # if( length(unique(edge.mat[, 1])) > length(unique(edge.mat[, 2])) ) {
+  #   # if the 2nd col is the one with fewer levels
+  #   edge.mat <- edge.mat[, c(2, 1)]
+  # }
+
+  if(is.null(colnames(edge.mat)))
+    colnames(edge.mat) <- seq(2)
+  if(is.null(names_from)) names_from <- colnames(edge.mat)[1]
+  idx.name <- which(names_from == colnames(edge.mat))
+  # browser();QWER
+  tm <- edge.mat[, -idx.name]
+  names(tm) <- NULL
+  return(split(tm, edge.mat[, idx.name]))
+
+}
+
+#' translate a matrix of graph edges into list
+#'
+#' @param edge.list a named list for edges (indices)
+#'
+#' @return a 2-col matrix of edges (pair of indices)
+#' @export
+#'
+#' @family {loc_graph}
+#'
+#' @examples
+#' set.seed(1)
+#' d <- 2
+#' coord <- matrix(runif(d * 10), ncol = d)
+#' edge.mat <- locWindow(c(0, 0), coord, 0.5, 'matrix')
+#' edge.list <- locWindow(c(0, 0), coord, 0.5, 'list')
+#' identical(edgeList2Mat(edge.list), edge.mat)
+edgeList2Mat <- function(edge.list){
+  # translate a list of graph edges into edge
+
+  if(is.null(names(edge.list))) {
+    warning('unnamed list input, using seq_along(edge.list).')
+    names(edge.list) <- seq_along(edge.list)
+  }
+  # make into a matrix
+  tm <- unlist(edge.list)
+  mat <- matrix(0L, nrow = length(tm), ncol = 2) # 0L to keep integer type
+  mat[, 1] <-
+    rep(as.integer(names(edge.list)), times = sapply(edge.list, length))
+  mat[, 2] <- tm
+
+  return(mat)
+
+}
+
+#' compute difference in coordinates corresponding to local graph
+#'
+#' @param coord a matrix of coordinates (1 row = 1 point)
+#' @param edge a matrix or list defining the edges connecting \code{coord}
+#' @param return.format the format for return, \code{"keep"} or
+#' \code{"full.matrix"}
+#'
+#' @return a matrix or list of difference in coordinates
+#'
+#' @details
+#' If \code{return.format == 'keep'}, will follow input format of \code{edge},
+#' say, if \code{edge} is a matrix, then return a matrix of difference in the
+#' coordinates of edges (1st column - 2nd column in \code{edge}), with one row
+#' corresponds to one edge.
+#' Otherwise, \code{edge} is a list, then return a list of such matrices.
+#' \cr
+#' If \code{return.format == 'full.matrix'}, return a matrix of
+#' \code{2 + ncol(coord)} columns, where the first 2 are matrix of \code{edge},
+#' while the last few are difference in coordinates.
+#'
+#' @export
+#'
+#' @examples TBD
+deltaCoord <- function(coord, edge, return.format = 'keep'){
+  # compute difference in coordinates according to edge
+  edge.in <- edge
+  if(typeof(edge.in) == 'list') {
+    edge <- edgeList2Mat(edge)
+  }
+  stopifnot(ncol(edge) == 2)
+  stopifnot(is.matrix(coord))
+  stopifnot(min(edge) >= 1 & max(edge) <= nrow(coord))
+
+  d <- ncol(coord)
+  coord.diff <- coord[edge[, 1], , drop = F] - coord[edge[, 2], , drop = F]
+
+  return.format <- match.arg(return.format, c('keep', 'full.matrix'))
+
+  if(return.format == 'keep'){
+    if(typeof(edge.in) != 'list') {
+      return(coord.diff)
+    }else{
+      coord.diff <- split(coord.diff, edge[, 1])
+      coord.diff <- lapply(coord.diff, function(x) matrix(x, ncol = d))
+      return(coord.diff)
+    }
+  }else{
+    res <- matrix(0, nrow = nrow(edge), ncol = 2 + d)
+    res[, seq(2)] <- edge
+    res[, 2 + seq(d)] <- coord.diff
+    colnames(res) <- c('p1', 'p2', sprintf('coordd.%s', seq(d)))
+    return(res)
+  }
+
+  stop('something wrong.')
+
+}
+
+#' identify local neighbors of target points
+#'
+#' @param target a matrix for coordinates of targets, 1 row = 1 point
+#' @param coord a matrix for coordinates of points, 1 row = 1 point
+#' @param local.reach approximate size of local neighborhood square
+#' (treated as Euclidean space), recycled if necessary
+#' @param return \code{"list"} (default) / \code{"matrix"}, return format
+#'
+#' @return a list or matrix of indices of \code{coord} that is within
+#' neighborhood of \code{target}.
+#'
+#' @details If \code{return == "list"}, then a list with length equal to
+#' \code{nrow(target)}, whose ith elements are indices (row) for points in
+#' \code{coord} that are within \code{local.reach} of \code{target[i, ]}.
+#' \cr
+#' If \code{return == "matrix"} then a 2-column matrix where first column are
+#' indices of points in \code{target} and second are indices of \code{coord}
+#' that is within \code{local.reach} of the target point.
+#' \cr
+#' Note that this function only consider a square neighborhood of coordinate
+#' values, no geometry is involved.
+#'
+#' @export
+#'
+#' @seealso edgeMat2List for changing format
+#'
+#' @examples set.seed(1)
+#' d <- 2
+#' coord <- matrix(runif(d * 10), ncol = d)
+#' locWindow(c(0, 0), coord, 0.5, 'matrix')
+locWindow <- function(target, coord, local.reach, return = 'list'){
+  # a function finding neighbors
+  # args:
+  #   coord: a matrix for coordinates of points, 1 row = 1 point
+  #   width: width of intervals
+  #   return: list(default)/data.frame, what to return
+  # returns: a list/data.frame of 2 column with elements being seq(nrow(coord)),
+  #   for example, a row of (1, 2) means the point coord[2, ] is within
+  #   the box of width centering at point coord[1, ].
+  # Details: only judging by difference in coordinates, does not care about
+  #   geometry. Also, the ith list will start from i.
+
+  # target <- matrix(rnorm(2 * 10), ncol = 2, nrow = 10)
+  # coord <- matrix(rnorm(2 * 5000), ncol = 2, nrow = 5000)
+  # local.reach <- 0.15
+
+  stopifnot(
+    all(is.finite(coord)) & all(is.finite(local.reach)) & all(is.finite(target))
+  )
+
+  if(!is.matrix(coord))
+    coord <- matrix(coord, nrow = 1)
+  if(!is.matrix(target))
+    target <- matrix(target, nrow = 1)
+  d <- ncol(coord)
+  n <- nrow(target)
+
+  stopifnot(all(local.reach >= 0))
+  stopifnot(length(local.reach) == 1 | length(local.reach) == d)
+  stopifnot(ncol(target) == d)
+  if(length(local.reach) == 1)
+    local.reach <- rep(local.reach, d)
+
+  t.coord <- t(coord) # one col for one point, for vectorization
+  tm.res <- lapply(seq(n), function(idx){
+    which(
+      colSums(
+        abs(t.coord - target[idx, ]) <= local.reach
+      ) == d
+    )
+  })
+  names(tm.res) <- seq_along(tm.res)
+
+  return <- match.arg(return, c('list', 'matrix'))
+  if(return == 'list'){
+    return(tm.res)
+  }
+  tm <- unlist(tm.res)
+  mat <- matrix(0L, nrow = length(tm), ncol = 2) # 0L to keep integer type
+  # note that if length(element) is 0, rep times = 0, so we are fine.
+  mat[, 1] <- rep(seq_along(tm.res), times = sapply(tm.res, length))
+  mat[, 2] <- tm
+  return(mat)
+}

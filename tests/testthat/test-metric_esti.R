@@ -1,6 +1,40 @@
 # Core functions for metric estimation
 
-test_that("locMetric.g", {
+test_that('estiMetric', {
+
+  d <- 3
+  target <- t(matrix(c(rep(0.25, d), rep(0.5, d)), ncol = 2))
+  manifold <- spaceEuclidean(d)
+  set.seed(1)
+  obsv.coord <- manifold$genPnt(10^4)
+  idx.edge <- allEdge(obsv.coord, local.reach = 0.1)
+  idx.edge <- idx.edge[idx.edge[, 1] != idx.edge[, 2], , drop = F]
+  resp <- cbind(manifold$dist(
+    obsv.coord[idx.edge[, 1], ], obsv.coord[idx.edge[, 2], ]
+  ) ^ 2, idx.edge)
+  # plotGraph(obsv.coord, resp[, -1], max.n.edge = 50)
+
+  res <- estiMetric(
+    target, resp, obsv.coord = obsv.coord
+    # , optns = list(get.loc.obsv = T)
+  )
+  # check symmetric and positive definite
+  expect_true(all(sapply(res$metric, isSymmetric)))
+  expect_true(all(sapply(res$metric, function(metric){
+    eig.val <- eigen(metric, symmetric = T, only.values = T)
+    all(eig.val$values >= 0)
+  })))
+  # check estimation correctness
+  true.metric <- apply(target, 1, manifold$metric, simplify = F)
+  expect_true(all(
+    base::mapply(
+      function(esti, true) all.equal(esti, true),
+      esti = res$metric, true = true.metric
+    )
+  ))
+})
+
+test_that("locMetric", {
 
   d <- 3
 
@@ -30,12 +64,12 @@ test_that("locMetric.g", {
   # noiseless observation
   expect_equal(
     diag(rep(1, d)),
-    locMetric.g(arr.dist ^ 2, coord.diff)$mat.g
+    locMetric(arr.dist ^ 2, coord.diff)$mat.g
   )
   # normal noise (after squared)
   expect_equal(
     diag(rep(1, d)),
-    locMetric.g(
+    locMetric(
       arr.dist ^ 2 + rnorm(length(arr.dist), sd = sd(arr.dist) / 50),
       coord.diff
     )$mat.g
@@ -44,7 +78,7 @@ test_that("locMetric.g", {
   # binary thresholding
   expect_equal(
     diag(rep(1, d)),
-    locMetric.g(
+    locMetric(
       arr.thre, coord.diff
       , optns = list(type = 't', intercept = FALSE)
     )$mat.g
@@ -53,7 +87,7 @@ test_that("locMetric.g", {
   # binary thresholding w/ intercept
   expect_equal(
     diag(rep(1, d)),
-    locMetric.g(
+    locMetric(
       arr.thre.itcpt, coord.diff
       , optns = list(type = 't', intercept = TRUE)
     )$mat.g
@@ -83,14 +117,14 @@ test_that("locMetric.g", {
   # comparing distance
   expect_equal(
     diag(rep(1, d)),
-    locMetric.g(
+    locMetric(
       arr.comp, ls.coord.diff
       , optns = list(type = 'comp', intercept = FALSE)
     )$mat.g
     , tolerance = 0.035 #0.175
   )
   # comparing distance w/ intercept
-  res.itcpt <- locMetric.g(
+  res.itcpt <- locMetric(
     arr.comp, ls.coord.diff
     , optns = list(type = 'comp', intercept = TRUE)
   )

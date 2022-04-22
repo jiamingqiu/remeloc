@@ -73,3 +73,41 @@ test_that("Sigmoid and logit function", {
     sigmoid.f.inv(arr.p)
   )
 })
+
+test_that("Square neighborhood identification", {
+  set.seed(1)
+  d <- 3
+  coord <- matrix(runif(d * 2000), ncol = d)
+  edge.res <- allEdge(coord, 0.1)
+  locW.res <- locWindow(coord, coord, 0.1, 'matrix')
+  expect_identical(
+    locW.res[locW.res[, 1] <= locW.res[, 2], ],
+    edge.res
+  )
+
+  # microbenchmark::microbenchmark(list = alist(
+  #   locW = {
+  #     locW.res <- locWindow(coord, coord, 0.1, 'matrix')
+  #     locW.res[locW.res[, 1] <= locW.res[, 2], ]
+  #   },
+  #   edge = allEdge(coord, 0.1)
+  # ))
+
+})
+
+
+test_that("edge data format conversion", {
+  set.seed(1)
+  d <- 3
+  coord <- matrix(runif(d * 10), ncol = d)
+  edge.mat <- locWindow(rep(0, d), coord, 0.5, 'matrix')
+  edge.list <- locWindow(rep(0, d), coord, 0.5, 'list')
+  expect_identical(edgeMat2List(edge.mat), edge.list)
+  expect_identical(edgeList2Mat(edge.list), edge.mat)
+  expect_identical(edgeMat2List(edgeList2Mat(edge.list)), edge.list)
+  expect_identical(edgeList2Mat(edgeMat2List(edge.mat)), edge.mat)
+  expect_identical(formatGraph(edge.mat), edge.list)
+  expect_identical(formatGraph(edge.list), edge.mat)
+  expect_identical(formatGraph(edge.mat, 'matrix'), edge.mat)
+  expect_identical(formatGraph(edge.list, 'list'), edge.list)
+})
