@@ -59,16 +59,33 @@ test_that('fitMetric and estiMetric', {
   # check estimation accuracy
   expect_equal(esti.metric, true.metric)
 
-  # # binary censoring, not good for the moment, later TBDTBD
-  # dat.binary <- data.w.coord
-  # dat.binary$y <- sigmoid.f(50 * (dat.binary$y - 0.01))
-  # set.seed(1)
-  # dat.binary$y <- rbinom(nrow(dat.binary), 1, prob = dat.binary$y)
-  # # dat.binary$y %>% table()
-  # fit.binary <- fitMetric(formula.w.coord, dat.binary)
-  # estiMetric(rep(0, d), fit.binary)
+  ### binary censoring, not good for the moment, later TBDTBD
+  dat.binary <- data.w.coord
+  dat.binary$y <- sigmoid.f(20 * (dat.binary$y - 0.05))
+  # hist(dat.binary$y)
+  set.seed(1)
+  dat.binary$y <- rbinom(nrow(dat.binary), 1, prob = dat.binary$y)
+  # dat.binary$y %>% table()
+  fit.binary <- fitMetric(formula.w.coord, dat.binary,optns = list(
+    local.reach = 0.5, n.local = Inf, method.trim = 'proximity'
+    , type = 'thre', intercept = TRUE
+  ))
+  set.seed(10)
+  target <- manifold$genPnt(10)
+  true.metric <- apply(target, 1, manifold$metric, simplify = F)
+  true.metric <- lapply(true.metric, function(x) 20 * x)
+  esti.metric <- estiMetric(target, fit.binary)
+  names(esti.metric) <- NULL
+  # check symmetric and positive definite
+  expect_true(all(sapply(esti.metric, isSymmetric)))
+  expect_true(all(sapply(esti.metric, function(metric){
+    eig.val <- eigen(metric, symmetric = T, only.values = T)
+    all(eig.val$values >= 0)
+  })))
+  # check estimation accuracy, not so well, honestly.
+  expect_equal(esti.metric, true.metric, tolerance = 0.125)
 
-  # comparing
+  ### comparing edges
   set.seed(1)
   comp.edge <- genCompareGraph(c(500, 500), all.edge)
   sq.dist <- list(
@@ -91,10 +108,14 @@ test_that('fitMetric and estiMetric', {
   # dat.compare %>% head
   fit.compare <- fitMetric(
     y ~ p1:p2:p3:p4, dat.compare, obsv.coord, optns = list(
-      local.reach = 0.5, n.local = 10^4, method.trim = 'proximity'
-      , locMetric = list(type = 'comp', intercept = FALSE)
+      local.reach = 0.5
+      , n.local = 10^4, method.trim = 'proximity'
+      # , type = 'comp', intercept = FALSE
     )
   )
+
+  # test guess model
+  expect_identical(fit.compare$optns$type, 'compare')
 
   # expect_equal(
   #   estiMetric(rep(0.1, d), fit.compare)[[1]],

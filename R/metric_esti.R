@@ -1,16 +1,197 @@
 ### core functions for metric estimation
 
-### TBD: consider separate fit and "predict"(estimate) like locfit
-# In the fitting step, provide formula, a data.frame of response and edges, and
-# a matrix of coordinates (or coordinates in the data.frame directly), the fit
-# function will prepare the data for fast slicing, and store fitting options
-# such as the weight scheme, local reach, etc.
-# Then the "predict"(estimate) function will do all the hard works given a
-# wrapped fit result at required locations. So that we might have more
-# flexibility, say being able to predict in multiple steps as demand.
-# Also, see how we can keep the current call method, but also add new aliases,
-# say, overloading, c.f.
-# https://stackoverflow.com/questions/9266194/r-function-overloading.
+
+##### options setting ##########################################################
+
+# a handling one, another guessing model, and one drop unnecessary ones for glm
+
+idx_glm_optns <- function(optns){
+  # return index of options list that is passed to glm.fit
+  # by dropping what our method uses.
+  res <- which(!(names(optns) %in% c(
+    'n.local', 'method.trim', 'metric.only',
+    'local.reach', 'intercept', 'type'
+  )))
+  return(res)
+}
+
+#' set or update computational options
+#'
+#' @param optns a list of options
+#' @param ... what to set or update
+#'
+#' @return a list of options
+#' @export
+#'
+#' @details Possible options are
+#' \describe{
+#'    \item{\code{method.trim}}{
+#'        \code{"proximity"}(default)/\code{"random"}, method to select local
+#'        responses, either random, or by proximity to target points. Here
+#'        distance is taken assuming points are in Euclidean space regardless of
+#'        truth.
+#'    }
+#'    \item{\code{n.local}}{
+#'        max and min number of local responses to use. Missing then default to
+#'        \code{c(10, 1000)}. If provided only one value, will use as max, and
+#'        min will be set to 1.
+#'    }
+#'    \item{\code{metric.only}}{
+#'        \code{TRUE}(default)/\code{FALSE}, whether to return only the
+#'        estimated local metric tensor per target point, or to also include
+#'        additional results, such as local observations, fits, and options.
+#'    }
+#' }
+#'
+#' @family {locMetric}
+#'
+#' @examples
+#' set_optns()
+#' set_optns(method.trim = 'random')
+set_optns <- function(optns = list(), ...){
+  # setting/updating options
+  # browser();QWER
+
+  # fill in the input keys
+  f.call <- match.call()
+  ls.args <- as.list(f.call)[-1]
+  ls.args <- ls.args[names(ls.args) != 'optns']
+  optns[names(ls.args)] <- ls.args
+
+  ## fill in the defaults
+  # if locally more data available how to trim down the size
+  optns$method.trim <- match.arg(optns$method.trim, c(
+    'proximity', 'random'
+  ))
+
+  # max and min number of local responses to use
+  if(is.null(optns$n.local)) optns$n.local <- c(10, 1000)
+  stopifnot(all(optns$n.local >= 1))
+  if(length(optns$n.local) == 1) optns$n.local <- c(1, optns$n.local)
+
+  # what to return after estimation
+  if(is.null(optns$metric.only)) optns$metric.only <- TRUE
+  stopifnot(inherits(optns$metric.only, 'logical'))
+
+  return(optns)
+
+}
+
+#' guess model based on input
+#'
+#' @param optns a list of options
+#' @param formula model formula, optional
+#' @param data data, optional
+#'
+#' @return a list with model options, computational options will also be set.
+#' Note that guess will only take place when necessary options are not specified
+#' in \code{optns}.
+#'
+#' @export
+#'
+#' @details Possible options are
+#' \describe{
+#'   \item{\code{type}}{
+#'     \code{"distance"}, \code{"thresholding"}, or \code{"compare"}.
+#'     If \code{data} is supplied, will use the number of unique
+#'     values in its first column to determine whether it is binary response,
+#'     then, the number of its columns used to determine how many edges are
+#'     involved.
+#'     If only \code{formula} is supplied, will choose from \code{"distance"} or
+#'     \code{"compare"}, depending on number of edges deduced from
+#'     \code{formula}.
+#'     If non of \code{formula} and \code{data} not supplied, default to
+#'     \code{"distance"}.
+#'   }
+#'   \item{\code{intercept}}{
+#'     \code{FALSE} or \code{TRUE}, whether to add an intercept term.
+#'     Will default to \code{FALSE} unless \code{type = "thresholding"}.
+#'   }
+#'   \item{\code{family}}{
+#'     passed to \code{glm.fit}, Default:
+#'     missing for \code{type = "distance"};
+#'     \code{binomial(link = "logit")} for
+#'        \code{type = c("thresholding", "compare")}.
+#'     Note that if no \code{family} specified in \code{type = "distance"}, will
+#'     use a simple QR-solve for OLS instead of \code{glm.fit}.
+#'   }
+#'   \item{\code{...}}{
+#'     passed to \code{glm.fit}, say, specify weight when using
+#'     \code{glm.fit}.
+#'   }
+#' }
+#'
+#'
+#' @family {locMetric}
+#'
+#' @examples
+#' guess_model()
+guess_model <- function(optns = list(), formula, data, ...){
+  # a function used to guess model based on formula or data then fill-in
+  # unspecified optns
+
+  # fill-in default computational options first
+  optns <- set_optns(optns, ...)
+
+  # if(missing(formula)) stopifnot(!missing(data))
+  # if(missing(data)) stopifnot(!missing(formula))
+
+  # then guess
+  guess.optns <- list()
+  if(missing(formula) & missing(data)){
+
+    guess.optns$type <- 'distance'
+
+  }else if(missing(formula)){
+
+    stopifnot(!missing(data))
+    if( length(unique(data[, 1])) > 2 ){
+      if((ncol(data) - 1) %% 2 != 0) stop(
+        'continuous response, but with edge comparison format.'
+      )
+      guess.optns$type <- 'distance'
+    }else if( (ncol(data) - 1) %% 3 == 0 ){
+      guess.optns$type <- 'thresholding'
+    }else{
+      guess.optns$type <- 'compare'
+    }
+
+  }else{
+
+    stopifnot(!missing(formula))
+    n.edges <- 1 + length(stringr::str_extract_all(
+      deparse(formula, width.cutoff = 200L), ':'
+    )[[1]])
+    if(n.edges == 2){
+      guess.optns$type <- 'distance'
+    }else{
+      guess.optns$type <- 'compare'
+    }
+
+  }
+
+  # fill-in if not specified
+  if(is.null(optns$type)){
+    optns$type <- guess.optns$type
+  }
+  optns$type <- match.arg(optns$type, c("distance", "thresholding", "compare"))
+
+  # fill-in some default if not specified
+  if(is.null(optns$family) & optns$type != "distance"){
+    # if family not specified for thresholding and compare type
+    optns$family <- stats::binomial(link = "logit")
+  }
+
+  if(is.null(optns$intercept)){
+    optns$intercept <- base::ifelse(
+      optns$type == "thresholding", TRUE, FALSE
+    )
+  }
+  stopifnot(inherits(optns$intercept, 'logical'))
+
+  return(optns)
+
+}
 
 
 #' Fit model for local metric
@@ -24,10 +205,41 @@
 #' @param optns control options
 #'
 #' @return a \code{metricModel} object, essentially a list wrapping data and
-#' options.
+#' options. Its elements are
+#' \describe{
+#'   \item{\code{graph}}{A list of graph edges for faster indexing.}
+#'   \item{\code{coord}}{matrix of coordinates of points, one row is one point.}
+#'   \item{\code{resp}}{
+#'     data frame of response, in the format of \code{resp} as demanded by
+#'     \code{\link{estiMetric}}.
+#'   }
+#'   \item{\code{optns}}{
+#'     list of options, unspecified will be filled by default or best guesses.
+#'   }
+#' }
 #' @export
 #'
 #' @details
+#'
+#' For squared distance type, \code{y} is numeric vector, modeled by
+#' \deqn{E(y_{ij} | D_{ij}) = g^{-1}(\beta_0 + D_{ij}^2);}
+#' for thresholding (binary censoring) type, \code{y} is binary vector, modeled
+#' by
+#' \deqn{P(y_{ij} = 1 | D_{ij}) = g^{-1}(c (\beta_0 + D_{ij}^2) );}
+#' for comparing edges, \code{y} is binary vector, modeled by
+#' \deqn{
+#'     P(y_{ijkl} = 1 | D_{ij}, D_{kl})
+#'     = g^{-1}(c (\beta_0 + D_{ij}^2 - D_{kl}^2) );
+#' }
+#' where
+#' \eqn{y_{ij}} and \eqn{y_{ijkl}} are the response,
+#' \eqn{D_{ij}} and \eqn{D_{kl}} are geodesic distance between i-j and k-l
+#' points, while
+#' \eqn{g} is the link function specified by \code{optns$family} (default to
+#' Gaussian if missing),  \eqn{c} is some constant function due to conformality,
+#' and \eqn{\beta_0} is intercept (optional). Note that here \eqn{c} cannot be
+#' estimated, and the resulting estimation is conformal to the underlying truth.
+#'
 #' The model is specified by \code{formula}, use \cr
 #' \code{y ~ (p1_1 + ... p1_d):(p2_1 + ... p2_d)} \cr
 #' for squared distance or binary censoring responses;
@@ -45,8 +257,7 @@
 #' \cr
 #' As previously mentioned, one can use coordinates or indices in the bracket to
 #' define a point. When using indices, coordinates of the points must be
-#' supplied via \code{coord} as a matrix with one row being one point. For
-#' example, a formula can be \code{y ~ p1 : p2}.
+#' supplied via \code{coord} as a matrix with one row being one point.
 #'
 #' The data frame \code{data} should contain response and edges, for example,
 #' with formula \code{y ~ p1 : p2}, then in \code{data},
@@ -55,31 +266,13 @@
 #' observed response between the 5th and 6th points (coordinates in 5th and 6th
 #' row of \code{coord} is 100.
 #' \cr
-#' Possible control options passed to \code{estiMetric} are
+#' In addition to those described in \code{\link{set_optns}} and
+#' \code{\link{guess_model}}, one additional control option is
 #' \describe{
 #'    \item{\code{local.reach}}{
 #'        positive numbers defining range of local neighborhood near
-#'        target points.
-#'    }
-#'    \item{\code{n.local}}{
-#'        max and min number of local responses to use. Missing then default to
-#'        \code{c(10, 1000)}. If provided only one value, will use as max.
-#'    }
-#'    \item{\code{method.trim}}{
-#'        \code{"random"}(default)/\code{"proximity"}, method to select local
-#'        responses, either random, or by proximity to target points. Here
-#'        distance is taken assuming points are in Euclidean space regardless of
-#'        truth.
-#'    }
-#'    \item{\code{only.metric}}{
-#'        \code{TRUE}(default)/\code{FALSE}, whether to return only the
-#'        estimated local metric tensor per target point, or to also include
-#'        additional results, such as local observations, fits, and options.
-#'    }
-#'    \item{\code{locMetric}}{
-#'        list passed to \code{optns} argument in \code{locMetric} function.
-#'        Note that \code{optns$locMetric$type} will be set based on best guess
-#'        here if unspecified.
+#'        target points. If missing, will be set to approximately include 1000
+#'        points in local neighbor hood.
 #'    }
 #' }
 #'
@@ -249,33 +442,36 @@ fitMetric <- function(formula, data, coord, optns = list()){
       abs( prod( apply( obsv.coord, 2, function(x) { diff(range(x)) }) ) )  /
       (nrow(obsv.coord) / 1000)
   }
-  if(is.null(optns$n.local)){
-    optns$n.local <- c(10, 1000)
-  }
-  if(length(optns$n.local) == 1){
-    optns$n.local <- c(1, optns$n.local)
-  }
-  stopifnot(all(optns$n.local >= 1))
-  if(is.null(optns$get.loc.obsv))
-    optns$get.loc.obsv <- FALSE
-  stopifnot(
-    length(optns$get.loc.obsv) == 1 & inherits(optns$get.loc.obsv, 'logical')
-  )
-  if(is.null(optns$locMetric)){
-    tm <- list()
-    if( length(unique(resp[, 1])) > 2 ){
-      if(ncol(resp) != 3) stop(
-        'input distance, but with edge comparison format.'
-      )
-      tm$type <- 'distance'
-    }else if( ncol(resp) == 3 ){
-      tm$type <- 'thresholding'
-    }else{
-      tm$type <- 'compare'
-    }
-    optns$locMetric <- tm
-  }
-  optns$method.trim <- match.arg(optns$method.trim, c("random", "proximity"))
+  optns <- set_optns(optns)
+  optns <- guess_model(optns, formula = formula, data = resp)
+
+  # if(is.null(optns$n.local)){
+  #   optns$n.local <- c(10, 1000)
+  # }
+  # if(length(optns$n.local) == 1){
+  #   optns$n.local <- c(1, optns$n.local)
+  # }
+  # stopifnot(all(optns$n.local >= 1))
+  # if(is.null(optns$get.loc.obsv))
+  #   optns$get.loc.obsv <- FALSE
+  # stopifnot(
+  #   length(optns$get.loc.obsv) == 1 & inherits(optns$get.loc.obsv, 'logical')
+  # )
+  # if(is.null(optns$locMetric)){
+  #   tm <- list()
+  #   if( length(unique(resp[, 1])) > 2 ){
+  #     if(ncol(resp) != 3) stop(
+  #       'input distance, but with edge comparison format.'
+  #     )
+  #     tm$type <- 'distance'
+  #   }else if( ncol(resp) == 3 ){
+  #     tm$type <- 'thresholding'
+  #   }else{
+  #     tm$type <- 'compare'
+  #   }
+  #   optns$locMetric <- tm
+  # }
+  # optns$method.trim <- match.arg(optns$method.trim, c("proximity", "random"))
 
   ### reformat for faster slicing later
   # for faster slicing later, we translate df.resp into list, for the record,
@@ -360,39 +556,21 @@ fitMetric <- function(formula, data, coord, optns = list()){
 #'    comparing edges cases) the response for comparing edge 5-6 and edge 6-8 is
 #'    1.
 #'    \cr
-#'    If requested by setting \code{optns$get.loc.obsv} as \code{TRUE}, the
-#'    returned value have an additional element for local observations (edges),
+#'    If requested by setting \code{optns$metric.only} as \code{FALSE}, the
+#'    returned value have an additional elements for local observations (edges),
 #'    which is also a named list named after row indices of \code{target}, whose
 #'    elements are matrices with columns corresponding to indices of edges
 #'    endpoints, response, and difference in coordinates.
 #'    \cr\cr
-#'    Possible control options are
-#'    \describe{
+#' In addition to those described in \code{\link{set_optns}} and
+#' \code{\link{guess_model}}, one additional control option is
+#' \describe{
 #'    \item{\code{local.reach}}{
 #'        positive numbers defining range of local neighborhood near
-#'        target points.
+#'        target points. If missing, will be set to approximately include 1000
+#'        points in local neighbor hood.
 #'    }
-#'    \item{\code{n.local}}{
-#'        max and min number of local responses to use. Missing then default to
-#'        \code{c(10, 1000)}. If provided only one value, will use as max.
-#'    }
-#'    \item{\code{method.trim}}{
-#'        \code{"random"}(default)/\code{"proximity"}, method to select local
-#'        responses, either random, or by proximity to target points. Here
-#'        distance is taken assuming points are in Euclidean space regardless of
-#'        truth.
-#'    }
-#'    \item{\code{only.metric}}{
-#'        \code{TRUE}(default)/\code{FALSE}, whether to return only the
-#'        estimated local metric tensor per target point, or to also include
-#'        additional results, such as local observations, fits, and options.
-#'    }
-#'    \item{\code{locMetric}}{
-#'        list passed to \code{optns} argument in \code{locMetric} function.
-#'        Note that \code{optns$locMetric$type} will be set based on best guess
-#'        here if unspecified.
-#'    }
-#'    }
+#' }
 #'
 #' @export
 #'
@@ -443,14 +621,6 @@ estiMetric <- function(target, model, resp, obsv.coord, optns = list()){
   # local(envir = env.dev, browser())
   # END DEBUG ONLY
 
-  # check target
-  if(!is.matrix(target)){
-    stopifnot(length(target) == d)
-    target <- matrix(target, nrow = 1)
-  }else{
-    stopifnot(ncol(target) == d)
-  }
-
   if(!missing(model)){
     if(!missing(resp) | !missing(obsv.coord))
       stop('Too many input, provide either 1. model or 2. resp and obsv.coord.')
@@ -459,7 +629,6 @@ estiMetric <- function(target, model, resp, obsv.coord, optns = list()){
     # check coordinates
     stopifnot(is.matrix(obsv.coord))
     stopifnot(all(is.finite(obsv.coord)))
-    d <- ncol(obsv.coord)
 
     # check distance
     stopifnot(ncol(resp) %in% c(3, 5))
@@ -486,6 +655,16 @@ estiMetric <- function(target, model, resp, obsv.coord, optns = list()){
 
   }
 
+  d <- ncol(model$coord)
+
+  # check target
+  if(!is.matrix(target)){
+    stopifnot(length(target) == d)
+    target <- matrix(target, nrow = 1)
+  }else{
+    stopifnot(ncol(target) == d)
+  }
+
   ### check options
   optns <- model$optns
   if(is.null(optns$local.reach)){
@@ -494,18 +673,20 @@ estiMetric <- function(target, model, resp, obsv.coord, optns = list()){
       abs( prod( apply( model$coord, 2, function(x) { diff(range(x)) }) ) ) /
       (nrow(model$coord) / 1000)
   }
-  if(is.null(optns$n.local)){
-    optns$n.local <- c(10, 1000)
-  }
-  if(length(optns$n.local) == 1){
-    optns$n.local <- c(1, optns$n.local)
-  }
-  stopifnot(all(optns$n.local >= 1))
-  if(is.null(optns$only.metric))
-    optns$only.metric <- TRUE
-  stopifnot(
-    length(optns$only.metric) == 1 & inherits(optns$only.metric, 'logical')
-  )
+  optns <- set_optns(optns)
+  optns <- guess_model(optns, formula = formula, data = resp)
+  # if(is.null(optns$n.local)){
+  #   optns$n.local <- c(10, 1000)
+  # }
+  # if(length(optns$n.local) == 1){
+  #   optns$n.local <- c(1, optns$n.local)
+  # }
+  # stopifnot(all(optns$n.local >= 1))
+  # if(is.null(optns$metric.only))
+  #   optns$metric.only <- TRUE
+  # stopifnot(
+  #   length(optns$metric.only) == 1 & inherits(optns$metric.only, 'logical')
+  # )
   # if(is.null(optns$locMetric)){
   #   tm <- list()
   #   if( length(unique(resp[, 1])) > 2 ){
@@ -520,7 +701,7 @@ estiMetric <- function(target, model, resp, obsv.coord, optns = list()){
   #   }
   #   optns$locMetric <- tm
   # }
-  optns$method.trim <- match.arg(optns$method.trim, c("random", "proximity"))
+  optns$method.trim <- match.arg(optns$method.trim, c("proximity", "random"))
 
   local.reach <- optns$local.reach
   max.n.local <- max(optns$n.local)
@@ -644,12 +825,12 @@ estiMetric <- function(target, model, resp, obsv.coord, optns = list()){
         coord.diff = input[, -seq(4), drop = F]
       )
     }
-    ls.args$optns <- optns$locMetric
+    ls.args$optns <- optns
     return(do.call(locMetric, ls.args))
   })
 
   # return list of local results: estimated metric tensor only or not
-  if(optns$only.metric)
+  if(optns$metric.only)
     return(lapply(res.locMetric, `[[`, 'mat.g'))
 
   loc.res <- list(
@@ -710,18 +891,8 @@ estiMetric <- function(target, model, resp, obsv.coord, optns = list()){
 #'        \code{type = c("thresholding", "compare")}.
 #'    }
 #' }
+#' One can use \code{\link{guess_model}} to set those options.
 #'
-#' For distance type, \code{y} is numeric vector, modeled by
-#' \deqn{E(y_i | D_i) = g^{-1}(\beta_0 + D_i^2),}
-#' for thresholding type, \code{y} is binary vector, modeled by
-#' \deqn{P(y_i = 1 | D_i) = g^{-1}(\beta_0 + D_i^2),}
-#' for compare type, \code{y} is binary vector, modeled by
-#' \deqn{P(y_{ij} = 1 | D_i, D_j) = g^{-1}(\beta_0 + D_i^2 - D_j^2),}
-#' where
-#' \eqn{y_i} is the ith response, \eqn{D_i} is the ith pair of geodesic distance
-#' corresponding to ith row of \code{coord.diff},
-#' \eqn{g} is the link function specified by \code{optns$family} (default to
-#' Gaussian if missing), \eqn{\beta_0} is intercept (optional).
 #' @export
 #'
 #' @family {locMetric}
@@ -805,7 +976,8 @@ locMetric <- function(y, coord.diff, optns = list()){
     )
   }
   # idx of arguments not pass to glm.fit
-  idx.optns.notglm <- which(names(optns) %in% c('intercept', 'type'))
+  # idx.optns.notglm <- which(names(optns) %in% c('intercept', 'type'))
+  idx.optns.glm <- idx_glm_optns(optns)
 
   # sanity and desgin matrix
   if(optns$type != "compare"){
@@ -832,7 +1004,7 @@ locMetric <- function(y, coord.diff, optns = list()){
   if(!is.null(optns$family)){# if using glm.fit with general family
     loc.fit <- do.call(stats::glm.fit, c(
       list(x = mat.v, y = y),
-      optns[-idx.optns.notglm]
+      optns[idx.optns.glm]
     ))
     vec.g <- loc.fit$coefficients
   }else{
