@@ -20,9 +20,9 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// locWindow_cpp
-List locWindow_cpp(NumericMatrix coord, NumericVector local_reach, IntegerMatrix marginOrder, IntegerMatrix marginRank);
-RcppExport SEXP _remeloc_locWindow_cpp(SEXP coordSEXP, SEXP local_reachSEXP, SEXP marginOrderSEXP, SEXP marginRankSEXP) {
+// allEdge_cpp
+List allEdge_cpp(NumericMatrix coord, NumericVector local_reach, IntegerMatrix marginOrder, IntegerMatrix marginRank);
+RcppExport SEXP _remeloc_allEdge_cpp(SEXP coordSEXP, SEXP local_reachSEXP, SEXP marginOrderSEXP, SEXP marginRankSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -30,14 +30,14 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< NumericVector >::type local_reach(local_reachSEXP);
     Rcpp::traits::input_parameter< IntegerMatrix >::type marginOrder(marginOrderSEXP);
     Rcpp::traits::input_parameter< IntegerMatrix >::type marginRank(marginRankSEXP);
-    rcpp_result_gen = Rcpp::wrap(locWindow_cpp(coord, local_reach, marginOrder, marginRank));
+    rcpp_result_gen = Rcpp::wrap(allEdge_cpp(coord, local_reach, marginOrder, marginRank));
     return rcpp_result_gen;
 END_RCPP
 }
 
 static const R_CallMethodDef CallEntries[] = {
     {"_remeloc_rcpp_hello", (DL_FUNC) &_remeloc_rcpp_hello, 0},
-    {"_remeloc_locWindow_cpp", (DL_FUNC) &_remeloc_locWindow_cpp, 4},
+    {"_remeloc_allEdge_cpp", (DL_FUNC) &_remeloc_allEdge_cpp, 4},
     {NULL, NULL, 0}
 };
 

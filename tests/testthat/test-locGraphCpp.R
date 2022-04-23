@@ -1,4 +1,4 @@
-test_that("locWindow_cpp and allEdge", {
+test_that("allEdge_cpp and allEdge", {
 
   # error handling safe guide (especially marginOrder and marginRank)
   set.seed(1)
@@ -8,28 +8,28 @@ test_that("locWindow_cpp and allEdge", {
   marginRank = apply(coord, 2, rank)
   loc.reach <- rep(1, d)
   expect_error(
-    locWindow_cpp(coord, 1, marginOrder, marginRank)
+    allEdge_cpp(coord, 1, marginOrder, marginRank)
   )
   expect_error(
-    locWindow_cpp(coord, loc.reach, marginOrder - 1, marginRank)
+    allEdge_cpp(coord, loc.reach, marginOrder - 1, marginRank)
   )
   expect_error(
-    locWindow_cpp(coord, loc.reach, marginOrder, head(marginRank))
+    allEdge_cpp(coord, loc.reach, marginOrder, head(marginRank))
   )
 
   # # # R is faster......
   # microbenchmark::microbenchmark(list = alist(
-  #   cpp = locWindow_cpp(coord, rep(0.1, d), marginOrder, marginRank),
+  #   cpp = allEdge_cpp(coord, rep(0.1, d), marginOrder, marginRank),
   #   R = allEdge(coord, 0.1)
   # ), times = 10L)
 
   # if not integer, will become integer, though extremely risky
-  # locWindow_cpp(
+  # allEdge_cpp(
   #   coord, loc.reach, pmin(marginOrder + 0.5, nrow(coord)), marginRank
   # )
 
   ## checking correctness of results
-  res.cpp <- locWindow_cpp(coord, rep(0.1, d), marginOrder, marginRank)
+  res.cpp <- allEdge_cpp(coord, rep(0.1, d), marginOrder, marginRank)
   tm <- unlist(res.cpp)
   mat.cpp <- matrix(0L, nrow = length(tm), ncol = 2) # 0L to keep integer type
   mat.cpp[, 1] <- rep(seq_along(res.cpp), times = sapply(res.cpp, length))
@@ -49,7 +49,7 @@ test_that("locWindow_cpp and allEdge", {
     apply(coord, 2, rank, ties.method = 'first')
   )
 
-  # locWindow_cpp(
+  # allEdge_cpp(
   #   coord, rep(1, 2), apply(coord, 2, order),
   #   apply(coord, 2, rank, ties.method = 'first')
   # ) %>% .[[1]] %>% class
@@ -87,12 +87,12 @@ test_that("locWindow_cpp and allEdge", {
 # set.seed(1)
 # coord <- matrix(runif(10), ncol = 2)
 # plot(coord)
-# locWindow_cpp(
+# allEdge_cpp(
 #   coord, rep(0.5, 2), apply(coord, 2, order), apply(coord, 2, rank)
 # )
 # coord <- matrix(0, nrow = 5, ncol = 2)
 # coord[-1, ] <- as.matrix(expand.grid(v1 = c(-1, 1), v2 = c(-1, 1)))
-# # locWindow_cpp(
+# # allEdge_cpp(
 # #   coord, rep(1, 2), apply(coord, 2, order), apply(coord, 2, rank)
 # # )
 # plot(coord)

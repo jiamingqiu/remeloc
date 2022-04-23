@@ -45,6 +45,19 @@ spaceEuclidean <- function(d){
 
 ##### other things #############################################################
 
+vecQuadIdx <- function(d){
+  # generate combinations of seq(d) taken 2 at a time
+  # with replacement.
+  # Returns: a 2 X d(d-1)/2 where each column is a
+  # combination.
+  stopifnot(d >= 2)
+  return(cbind(
+    # diag elements
+    t(matrix(seq(d), nrow = d, ncol = 2)),
+    utils::combn(d, 2) # non-diag elements
+  ))
+}
+
 #' Vectorization of terms in quadratic form.
 #' @md
 #' @param x an array or a matrix

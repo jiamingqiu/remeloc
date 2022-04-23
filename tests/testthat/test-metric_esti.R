@@ -1,37 +1,122 @@
 # Core functions for metric estimation
 
-test_that('estiMetric', {
+test_that('fitMetric and estiMetric', {
 
   d <- 3
-  target <- t(matrix(c(rep(0.25, d), rep(0.5, d)), ncol = 2))
   manifold <- spaceEuclidean(d)
   set.seed(1)
   obsv.coord <- manifold$genPnt(10^4)
-  idx.edge <- allEdge(obsv.coord, local.reach = 0.1)
-  idx.edge <- idx.edge[idx.edge[, 1] != idx.edge[, 2], , drop = F]
-  resp <- cbind(manifold$dist(
+  all.edge <- allEdge(obsv.coord, local.reach = 0.2)
+  idx.edge <- all.edge[all.edge[, 1] != all.edge[, 2], , drop = F]
+  idx.edge <- idx.edge[sample.int(nrow(idx.edge), 10^5), , drop = F]
+  sqdist <- manifold$dist(
     obsv.coord[idx.edge[, 1], ], obsv.coord[idx.edge[, 2], ]
-  ) ^ 2, idx.edge)
-  # plotGraph(obsv.coord, resp[, -1], max.n.edge = 50)
+  ) ^ 2
 
-  res <- estiMetric(
-    target, resp, obsv.coord = obsv.coord
-    # , optns = list(get.loc.obsv = T)
+  # input coord in data
+  data.w.coord <- cbind(
+    sqdist, obsv.coord[idx.edge[, 1], ], obsv.coord[idx.edge[, 2], ]
   )
+  data.w.coord <- as.data.frame(data.w.coord)
+  names(data.w.coord) <- c('y', sprintf('start%s', seq(d)), sprintf('end%s', seq(d)))
+  formula.w.coord <- as.formula(sprintf(
+    "y ~ (%s) : (%s)",
+    paste(sprintf('start%s', seq(d)), collapse = ' + '),
+    paste(sprintf('end%s', seq(d)), collapse = ' + ')
+  ))
+
+  # or use indices
+  data.w.idx <- cbind(sqdist, idx.edge)
+  data.w.idx <- as.data.frame(data.w.idx)
+  names(data.w.idx) <- c('y', sprintf('p%s', seq(2)))
+  formula.w.idx <- y ~ p1 : p2
+
+  fit.w.coord <- fitMetric(formula.w.coord, data.w.coord)
+  fit.w.idx <- fitMetric(formula.w.idx, data.w.idx, coord = obsv.coord)
+
+  expect_equal(
+    estiMetric(rep(0.5, d), fit.w.coord), estiMetric(rep(0.5, d), fit.w.idx)
+  )
+
+  set.seed(10)
+  target <- matrix(runif(d * 10), ncol = d)
+  true.metric <- apply(target, 1, manifold$metric, simplify = F)
+
+  # interchangeable model
+  expect_equal(
+    estiMetric(target, fit.w.coord), estiMetric(target, fit.w.idx)
+  )
+
+  esti.metric <- estiMetric(target, fit.w.coord)
+  names(esti.metric) <- NULL
+
   # check symmetric and positive definite
-  expect_true(all(sapply(res$metric, isSymmetric)))
-  expect_true(all(sapply(res$metric, function(metric){
+  expect_true(all(sapply(esti.metric, isSymmetric)))
+  expect_true(all(sapply(esti.metric, function(metric){
     eig.val <- eigen(metric, symmetric = T, only.values = T)
     all(eig.val$values >= 0)
   })))
-  # check estimation correctness
-  true.metric <- apply(target, 1, manifold$metric, simplify = F)
-  expect_true(all(
-    base::mapply(
-      function(esti, true) all.equal(esti, true),
-      esti = res$metric, true = true.metric
+  # check estimation accuracy
+  expect_equal(esti.metric, true.metric)
+
+  # # binary censoring, not good for the moment, later TBDTBD
+  # dat.binary <- data.w.coord
+  # dat.binary$y <- sigmoid.f(50 * (dat.binary$y - 0.01))
+  # set.seed(1)
+  # dat.binary$y <- rbinom(nrow(dat.binary), 1, prob = dat.binary$y)
+  # # dat.binary$y %>% table()
+  # fit.binary <- fitMetric(formula.w.coord, dat.binary)
+  # estiMetric(rep(0, d), fit.binary)
+
+  # comparing
+  set.seed(1)
+  comp.edge <- genCompareGraph(c(500, 500), all.edge)
+  sq.dist <- list(
+    manifold$dist(
+      obsv.coord[comp.edge[, 1], ], obsv.coord[comp.edge[, 2], ]
+    ) ^ 2
+    ,
+    manifold$dist(
+      obsv.coord[comp.edge[, 3], ], obsv.coord[comp.edge[, 4], ]
+    ) ^ 2
+  )
+  arr.prob <- sigmoid.f(25 * do.call(`-`, sq.dist))
+  # arr.prob %>% hist
+  set.seed(1)
+  dat.compare <- data.frame(
+    y = rbinom(length(arr.prob), 1, prob = arr.prob),
+    comp.edge
+  )
+  names(dat.compare) <- c('y', sprintf('p%s', seq(4)))
+  # dat.compare %>% head
+  fit.compare <- fitMetric(
+    y ~ p1:p2:p3:p4, dat.compare, obsv.coord, optns = list(
+      local.reach = 0.5, n.local = 10^4, method.trim = 'proximity'
+      , locMetric = list(type = 'comp', intercept = FALSE)
     )
-  ))
+  )
+
+  # expect_equal(
+  #   estiMetric(rep(0.1, d), fit.compare)[[1]],
+  #   diag(rep(25, d))
+  #   , tolerance = 0.075
+  # )
+
+  set.seed(10)
+  target <- manifold$genPnt(10)
+  true.metric <- apply(target, 1, manifold$metric, simplify = F)
+  true.metric <- lapply(true.metric, function(x) 25 * x)
+  esti.metric <- estiMetric(target, fit.compare)
+  names(esti.metric) <- NULL
+  # check symmetric and positive definite
+  expect_true(all(sapply(esti.metric, isSymmetric)))
+  expect_true(all(sapply(esti.metric, function(metric){
+    eig.val <- eigen(metric, symmetric = T, only.values = T)
+    all(eig.val$values >= 0)
+  })))
+  # check estimation accuracy, not so well, honestly.
+  expect_equal(esti.metric, true.metric, tolerance = 0.05)
+
 })
 
 test_that("locMetric", {

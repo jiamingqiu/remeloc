@@ -1,12 +1,342 @@
-# core functions for metric estimation
+### core functions for metric estimation
 
+### TBD: consider separate fit and "predict"(estimate) like locfit
+# In the fitting step, provide formula, a data.frame of response and edges, and
+# a matrix of coordinates (or coordinates in the data.frame directly), the fit
+# function will prepare the data for fast slicing, and store fitting options
+# such as the weight scheme, local reach, etc.
+# Then the "predict"(estimate) function will do all the hard works given a
+# wrapped fit result at required locations. So that we might have more
+# flexibility, say being able to predict in multiple steps as demand.
+# Also, see how we can keep the current call method, but also add new aliases,
+# say, overloading, c.f.
+# https://stackoverflow.com/questions/9266194/r-function-overloading.
+
+
+#' Fit model for local metric
+#'
+#' @description
+#' "fit" a model for local metric estimation, essentially prepare data.
+#'
+#' @param formula a formula for model
+#' @param data a data frame
+#' @param coord either a matrix of coordinates or missing
+#' @param optns control options
+#'
+#' @return a \code{metricModel} object, essentially a list wrapping data and
+#' options.
+#' @export
+#'
+#' @details
+#' The model is specified by \code{formula}, use \cr
+#' \code{y ~ (p1_1 + ... p1_d):(p2_1 + ... p2_d)} \cr
+#' for squared distance or binary censoring responses;
+#' use \cr\code{
+#' y ~ (p1_1 + ... p1_d):(p2_1 + ... p2_d):(p3_1 + ... p3_d):(p4_1 + ... p4_d)
+#' }\cr
+#' for comparing edges with binary responses;
+#' where the \code{y} are response variable in the \code{data}, while
+#' \code{p1_1, ..., p4_d} are coordinates or edge indices in the
+#' \code{data}, where the variables sandwiched between \code{:} defines a
+#' point, \code{:} defines an edge or comparison of two edges. A group of two
+#' consecutive points register one edge. For example, the previous formula
+#' compares edge \code{p1-p2} with \code{p3-p4}. Note that the coordinates must
+#' be in a same order for all the points.
+#' \cr
+#' As previously mentioned, one can use coordinates or indices in the bracket to
+#' define a point. When using indices, coordinates of the points must be
+#' supplied via \code{coord} as a matrix with one row being one point. For
+#' example, a formula can be \code{y ~ p1 : p2}.
+#'
+#' The data frame \code{data} should contain response and edges, for example,
+#' with formula \code{y ~ p1 : p2}, then in \code{data},
+#' the \code{y} column is response, while \code{p1, p2} columns are index of
+#' pairs of points, in which case, for example, a row of (100, 5, 6) means the
+#' observed response between the 5th and 6th points (coordinates in 5th and 6th
+#' row of \code{coord} is 100.
+#' \cr
+#' Possible control options passed to \code{estiMetric} are
+#' \describe{
+#'    \item{\code{local.reach}}{
+#'        positive numbers defining range of local neighborhood near
+#'        target points.
+#'    }
+#'    \item{\code{n.local}}{
+#'        max and min number of local responses to use. Missing then default to
+#'        \code{c(10, 1000)}. If provided only one value, will use as max.
+#'    }
+#'    \item{\code{method.trim}}{
+#'        \code{"random"}(default)/\code{"proximity"}, method to select local
+#'        responses, either random, or by proximity to target points. Here
+#'        distance is taken assuming points are in Euclidean space regardless of
+#'        truth.
+#'    }
+#'    \item{\code{only.metric}}{
+#'        \code{TRUE}(default)/\code{FALSE}, whether to return only the
+#'        estimated local metric tensor per target point, or to also include
+#'        additional results, such as local observations, fits, and options.
+#'    }
+#'    \item{\code{locMetric}}{
+#'        list passed to \code{optns} argument in \code{locMetric} function.
+#'        Note that \code{optns$locMetric$type} will be set based on best guess
+#'        here if unspecified.
+#'    }
+#' }
+#'
+#' @family {locMetric}
+#'
+#' @examples
+#' d <- 3
+#' manifold <- spaceEuclidean(d)
+#' set.seed(1)
+#' obsv.coord <- manifold$genPnt(10^4)
+#' idx.edge <- allEdge(obsv.coord, local.reach = 0.1)
+#' idx.edge <- idx.edge[idx.edge[, 1] != idx.edge[, 2], , drop = F]
+#' idx.edge <- idx.edge[sample.int(nrow(idx.edge), 10^5), , drop = F]
+#' resp <- manifold$dist(
+#'   obsv.coord[idx.edge[, 1], ], obsv.coord[idx.edge[, 2], ]
+#' ) ^ 2
+#'
+#' # input coord in data
+#' data.w.coord <- cbind(
+#'   resp, obsv.coord[idx.edge[, 1], ], obsv.coord[idx.edge[, 2], ]
+#' )
+#' data.w.coord <- as.data.frame(data.w.coord)
+#' names(data.w.coord) <- c('y', sprintf('start%s', seq(d)), sprintf('end%s', seq(d)))
+#' formula.w.coord <- as.formula(sprintf(
+#'   "y ~ (%s) : (%s)",
+#'   paste(sprintf('start%s', seq(d)), collapse = ' + '),
+#'   paste(sprintf('end%s', seq(d)), collapse = ' + ')
+#' ))
+#'
+#' # or use indices
+#' data.w.idx <- cbind(resp, idx.edge)
+#' data.w.idx <- as.data.frame(data.w.idx)
+#' names(data.w.idx) <- c('y', sprintf('p%s', seq(2)))
+#' formula.w.idx <- y ~ p1 : p2
+#'
+#' fit.w.coord <- fitMetric(formula.w.coord, data.w.coord)
+#' fit.w.idx <- fitMetric(formula.w.idx, data.w.idx, coord = obsv.coord)
+#'
+#' all.equal(
+#'   estiMetric(rep(0.5, d), fit.w.coord), estiMetric(rep(0.5, d), fit.w.idx)
+#' )
+#'
+#' set.seed(10)
+#' target <- matrix(runif(d * 10), ncol = d)
+#' true.metric <- apply(target, 1, manifold$metric, simplify = F)
+#'
+#' # interchangeable model
+#' all.equal(
+#'   estiMetric(target, fit.w.coord), estiMetric(target, fit.w.idx)
+#' )
+#'
+#' esti.metric <- estiMetric(target, fit.w.coord)
+#' names(esti.metric) <- NULL
+#'
+#' # check symmetric and positive definite
+#' all(sapply(esti.metric, isSymmetric))
+#' all(sapply(esti.metric, function(metric){
+#'   eig.val <- eigen(metric, symmetric = T, only.values = T)
+#'   all(eig.val$values >= 0)
+#' }))
+#' # check estimation accuracy
+#' all.equal(esti.metric, true.metric)
+fitMetric <- function(formula, data, coord, optns = list()){
+  # "fit" a model for local metric estimation, essentially prepare data.
+
+  # # DEV ONLY
+  # env.dev <- new.env()
+  # local(envir = env.dev, {
+  #
+  #   # gen data
+  #   d <- 3
+  #   manifold <- spaceEuclidean(d)
+  #   set.seed(1)
+  #   obsv.coord <- manifold$genPnt(10^4)
+  #   idx.edge <- allEdge(obsv.coord, local.reach = 0.1)
+  #   idx.edge <- idx.edge[idx.edge[, 1] != idx.edge[, 2], , drop = F]
+  #   idx.edge <- idx.edge[sample.int(nrow(idx.edge), 10^5), , drop = F]
+  #   resp <- manifold$dist(
+  #     obsv.coord[idx.edge[, 1], ], obsv.coord[idx.edge[, 2], ]
+  #   ) ^ 2
+  #   optns <- list()
+  #   browser();QWER
+  #   # input coord in data
+  #   data <- cbind(
+  #     resp, obsv.coord[idx.edge[, 1], ], obsv.coord[idx.edge[, 2], ]
+  #   )
+  #   data <- as.data.frame(data)
+  #   names(data) <- c('y', sprintf('start%s', seq(d)), sprintf('end%s', seq(d)))
+  #   formula <- as.formula(sprintf(
+  #     "y ~ (%s) : (%s)",
+  #     paste(sprintf('start%s', seq(d)), collapse = ' + '),
+  #     paste(sprintf('end%s', seq(d)), collapse = ' + ')
+  #   ))
+  #
+  #   # or use indices
+  #   data <- cbind(resp, idx.edge)
+  #   data <- as.data.frame(data)
+  #   names(data) <- c('y', sprintf('p%s', seq(2)))
+  #   formula <- y ~ p1 : p2
+  #   coord <- obsv.coord
+  # })
+  # local(envir = env.dev, {browser();QWER})
+  # # END DEV
+
+  stopifnot(all(is.finite(as.matrix(data))))
+
+  char.form <- deparse(formula)
+  char.form <- stringr::str_remove_all(char.form, '\\s')
+  # form.coord <- stringr::str_extract_all(
+  #   char.form, "((?<=(:\\()).*(?=\\)))|((?<=(\\()).*(?=\\):))"
+  # )
+  form.coord <- stringr::str_remove_all(char.form, '.*~')
+  form.coord <- stringr::str_split(form.coord, ':')
+  form.coord <- sapply(unlist(form.coord), function(x) {
+    stringr::str_split(stringr::str_remove_all(x, '\\(|\\)'), pattern = '\\+')
+  })
+  form.resp <- stringr::str_extract(char.form, '^.*(?=~)')
+
+  # dimension
+  if(!missing(coord)){
+    d <- ncol(coord)
+  }else{
+    d <- length(form.coord[[1]])
+    stopifnot(all(sapply(form.coord, length) == d))
+  }
+
+  # extract coordinates of input points
+  input.pnts <- lapply(form.coord, function(i) {
+    mat <- as.matrix(data[, i])
+    colnames(mat) <- NULL
+    return(mat)
+  })
+
+  # prepare mat.edge and obsv.coord
+  if(!missing(coord)){
+
+    mat.edge <- do.call(cbind, input.pnts)
+    # some checking
+    stopifnot(all(mat.edge >= 1) & all(mat.edge <= nrow(coord)))
+    stopifnot(all.equal(as.integer(mat.edge), as.numeric(mat.edge)))
+
+    stopifnot(all(is.finite(coord)))
+    obsv.coord <- coord
+
+  }else{
+
+    # create look-up dictionary as a whole
+    tm <- indexPoints(do.call(rbind, input.pnts))
+    # this is the matrix of unique coordinates, ncol(coord) = d
+    obsv.coord <- tm$coord
+    idx.pnts <- tm$idx
+    # split indices and reformat in to indices of edge
+    idx.edge <- split(
+      idx.pnts, rep(seq_along(input.pnts), each = nrow(data))
+    )
+    # now a matrix of edges, nrow(mat.edge) = nrow(data)
+    mat.edge <- do.call(cbind, idx.edge)
+    rm(idx.edge) # reserve name to avoid confusion.
+
+  }
+  resp <- cbind(data[[form.resp]], mat.edge)
+
+  ### check options, keep identical as those in estiMetric
+  if(is.null(optns$local.reach)){
+    # approx. 1000 pnts in each nbhd, if target & obsv unif in a square
+    optns$local.reach <-
+      abs( prod( apply( obsv.coord, 2, function(x) { diff(range(x)) }) ) )  /
+      (nrow(obsv.coord) / 1000)
+  }
+  if(is.null(optns$n.local)){
+    optns$n.local <- c(10, 1000)
+  }
+  if(length(optns$n.local) == 1){
+    optns$n.local <- c(1, optns$n.local)
+  }
+  stopifnot(all(optns$n.local >= 1))
+  if(is.null(optns$get.loc.obsv))
+    optns$get.loc.obsv <- FALSE
+  stopifnot(
+    length(optns$get.loc.obsv) == 1 & inherits(optns$get.loc.obsv, 'logical')
+  )
+  if(is.null(optns$locMetric)){
+    tm <- list()
+    if( length(unique(resp[, 1])) > 2 ){
+      if(ncol(resp) != 3) stop(
+        'input distance, but with edge comparison format.'
+      )
+      tm$type <- 'distance'
+    }else if( ncol(resp) == 3 ){
+      tm$type <- 'thresholding'
+    }else{
+      tm$type <- 'compare'
+    }
+    optns$locMetric <- tm
+  }
+  optns$method.trim <- match.arg(optns$method.trim, c("random", "proximity"))
+
+  ### reformat for faster slicing later
+  # for faster slicing later, we translate df.resp into list, for the record,
+  # slicing list is 10 times faster than slicing data.frame, and slicing list
+  # by its index is 100 times faster than slicing by its name. We compute diff
+  # of coord here so as to avoid it being computed multiple times in different
+  # local nbhd when estimating locally, especially local.reach is large creating
+  # overlaps, and when comparing multiple pairs.
+
+  df.resp <- data.frame(resp)
+  names(df.resp) <- c('resp', outer(
+    seq(2), seq(ncol(df.resp) %/% 2),
+    function(x, y) sprintf('p%se%s', x, y)
+  ))
+  df.resp$idx.dist <- seq(nrow(df.resp))
+  # next: to list, essentially a faster slicing index by split into list
+  # this template of list is used for faster slicing later
+  template.ls <- rep(list(NULL), nrow(obsv.coord))
+  names(template.ls) <- seq_along(template.ls)
+
+  ls.graph <- lapply(seq(ncol(resp) %/% 2), function(idx.edge.set) {
+    # browser();QWER
+    mat.edge <- as.matrix(df.resp[, 1 + seq(2) + 2 * (idx.edge.set - 1)])
+    if(length(unique(mat.edge[, 1]))> length(unique(mat.edge[, 2]))){
+      # switch index columns to put the least varying first
+      mat.edge <- mat.edge[, c(2, 1)]
+    }
+    tm <- list(
+      mat.edge, df.resp$idx.dist, df.resp$resp,
+      deltaCoord(obsv.coord, mat.edge, return.format = 'keep')
+    )
+    tm <- do.call(cbind, tm) # this is fast enough
+    colnames(tm) <- c(
+      'p1', 'p2', 'idx.dist', 'resp', sprintf('coordd.%s', seq(d))
+    )
+
+    # split into list
+    tm <- split.data.frame(tm, tm[, 'p1'])
+    res <- template.ls
+    res[names(tm)] <- tm
+    return(res)
+  })
+
+  res <- list(
+    graph = ls.graph, coord = obsv.coord,
+    resp = df.resp, optns = optns
+  )
+  class(res) <- c('metricModel', class(res))
+
+  return(res)
+
+}
 
 #' Local Estimation of Metric Tensor
 #' @description
 #'   Local estimation of metric tensor given squared distance,
 #'   binary censoring, or comparing edges responses. As a high-level wrapper
 #'   for \code{locMetric}.
+#'
 #' @param target matrix of the coordinate of target points (1 row = 1 point)
+#' @param model a fitted model from \code{fitMetric}
 #' @param resp data.frame or matrix of 3 or 5 columns with rows of observations
 #' @param obsv.coord coordinate matrix of observed points, 1 row = 1 point
 #' @param optns a list of control options.
@@ -15,7 +345,14 @@
 #' and \code{"optns"}, formatted local observations (\code{"loc.obsv"}) will be
 #' provided if requested.
 #'
-#' @details For \code{resp},
+#' @details
+#' Call by either \cr
+#' \code{estiMetric(target, model, optns = list())}
+#' \cr or \cr
+#' \code{estiMetric(target, resp, obsv.coord, optns = list())}.
+#' \cr\cr
+#' When using the second way to call, use the following input format.
+#' For \code{resp},
 #'    its first column is response, while 2nd to last columns are index of pairs
 #'    of points. For example, a row of (100, 5, 6) means the observed
 #'    response between the 5th and 6th points (coordinates in 5th and 6th row of
@@ -28,7 +365,7 @@
 #'    which is also a named list named after row indices of \code{target}, whose
 #'    elements are matrices with columns corresponding to indices of edges
 #'    endpoints, response, and difference in coordinates.
-#'    \cr
+#'    \cr\cr
 #'    Possible control options are
 #'    \describe{
 #'    \item{\code{local.reach}}{
@@ -45,9 +382,10 @@
 #'        distance is taken assuming points are in Euclidean space regardless of
 #'        truth.
 #'    }
-#'    \item{\code{get.loc.obsv}}{
-#'        \code{FALSE}(default)/\code{TRUE}, whether to return local
-#'        observations used per target point.
+#'    \item{\code{only.metric}}{
+#'        \code{TRUE}(default)/\code{FALSE}, whether to return only the
+#'        estimated local metric tensor per target point, or to also include
+#'        additional results, such as local observations, fits, and options.
 #'    }
 #'    \item{\code{locMetric}}{
 #'        list passed to \code{optns} argument in \code{locMetric} function.
@@ -60,7 +398,7 @@
 #'
 #' @family {locMetric}
 #' @examples TBD
-estiMetric <- function(target, resp, obsv.coord, optns = list()){
+estiMetric <- function(target, model, resp, obsv.coord, optns = list()){
   # function estimating metric tensor at target points
   # args:
   #   target: coordinate matrix of the target points (1 row = 1 point)
@@ -105,24 +443,6 @@ estiMetric <- function(target, resp, obsv.coord, optns = list()){
   # local(envir = env.dev, browser())
   # END DEBUG ONLY
 
-  ### sanity
-  stopifnot(is.matrix(obsv.coord))
-  stopifnot(all(is.finite(obsv.coord)))
-  d <- ncol(obsv.coord)
-
-  # check distance
-  stopifnot(ncol(resp) %in% c(3, 5))
-  stopifnot(all(is.finite(resp)) & all(resp >= 0))
-
-  # check indices
-  stopifnot(all(
-    resp[, -1] >= 1 & resp[, -1] <= nrow(obsv.coord)
-  ))
-  stopifnot(all.equal(
-    resp[, -1],
-    matrix(as.integer(resp[, -1]), ncol = ncol(resp[, -1]))
-  ))
-
   # check target
   if(!is.matrix(target)){
     stopifnot(length(target) == d)
@@ -131,12 +451,48 @@ estiMetric <- function(target, resp, obsv.coord, optns = list()){
     stopifnot(ncol(target) == d)
   }
 
-  # check options
+  if(!missing(model)){
+    if(!missing(resp) | !missing(obsv.coord))
+      stop('Too many input, provide either 1. model or 2. resp and obsv.coord.')
+  }else{
+
+    # check coordinates
+    stopifnot(is.matrix(obsv.coord))
+    stopifnot(all(is.finite(obsv.coord)))
+    d <- ncol(obsv.coord)
+
+    # check distance
+    stopifnot(ncol(resp) %in% c(3, 5))
+    stopifnot(all(is.finite(resp)) & all(resp >= 0))
+
+    # check indices
+    stopifnot(all(
+      resp[, -1] >= 1 & resp[, -1] <= nrow(obsv.coord)
+    ))
+    stopifnot(all.equal(
+      as.numeric(resp[, -1]), as.integer(resp[, -1])
+    ))
+
+    # call fitMetric
+    tm.dat <- data.frame(resp)
+    names(tm.dat) <- c('y', sprintf('p%s', seq(ncol(resp) - 1)))
+    model <- fitMetric(
+      formula = as.formula(sprintf('y ~ %s', paste(
+        sprintf('p%s', seq(ncol(resp) - 1)), collapse = ' : '
+      ))),
+      data = tm.dat, coord = obsv.coord, optns = optns
+    )
+    rm(tm.dat)
+
+  }
+
+  ### check options
+  optns <- model$optns
   if(is.null(optns$local.reach)){
     # approx. 1000 pnts in each nbhd, if target & obsv unif in a square
     optns$local.reach <-
-      abs( prod( apply( obsv.coord, 2, function(x) { diff(range(x)) }) ) )  /
-      (nrow(obsv.coord) / 1000)
+      abs( prod( apply( model$coord, 2, function(x) { diff(range(x)) }) ) ) /
+      (nrow(model$coord) / 1000)
   }
   if(is.null(optns$n.local)){
     optns$n.local <- c(10, 1000)
@@ -145,117 +501,68 @@ estiMetric <- function(target, resp, obsv.coord, optns = list()){
     optns$n.local <- c(1, optns$n.local)
   }
   stopifnot(all(optns$n.local >= 1))
-  if(is.null(optns$get.loc.obsv))
-    optns$get.loc.obsv <- FALSE
+  if(is.null(optns$only.metric))
+    optns$only.metric <- TRUE
   stopifnot(
-    length(optns$get.loc.obsv) == 1 & inherits(optns$get.loc.obsv, 'logical')
+    length(optns$only.metric) == 1 & inherits(optns$only.metric, 'logical')
   )
-  if(is.null(optns$locMetric)){
-    tm <- list()
-    if( length(unique(resp[, 1])) > 2 ){
-      if(ncol(resp) != 3) stop(
-        'input distance, but with edge comparison format.'
-      )
-      tm$type <- 'distance'
-    }else if( ncol(resp) == 3 ){
-      tm$type <- 'thresholding'
-    }else{
-      tm$type <- 'compare'
-    }
-    optns$locMetric <- tm
-  }
+  # if(is.null(optns$locMetric)){
+  #   tm <- list()
+  #   if( length(unique(resp[, 1])) > 2 ){
+  #     if(ncol(resp) != 3) stop(
+  #       'input distance, but with edge comparison format.'
+  #     )
+  #     tm$type <- 'distance'
+  #   }else if( ncol(resp) == 3 ){
+  #     tm$type <- 'thresholding'
+  #   }else{
+  #     tm$type <- 'compare'
+  #   }
+  #   optns$locMetric <- tm
+  # }
   optns$method.trim <- match.arg(optns$method.trim, c("random", "proximity"))
 
   local.reach <- optns$local.reach
   max.n.local <- max(optns$n.local)
   min.n.local <- min(optns$n.local)
 
-  # check for duplication, later
-  # df.resp <- as.data.frame(resp)
-  # names(df.resp) <- c('idx.pnt1', 'idx.pnt2', 'dist')
-  # stopifnot(all(df.resp[, seq(2)] >= 1))
-  # stopifnot(all(df.resp[, seq(2)] <= nrow(obsv.coord)))
-  # if(!all(with(df.resp, idx.pnt1 != idx.pnt2))){
-  #   warning('Dropping pairs whose two endpoints are the same point.')
-  #   df.resp <- df.resp[with(df.resp, idx.pnt1 != idx.pnt2), ]
-  # }
-  # if(is.null(optns$check11)){
-  #   optns$check11 <- TRUE
-  # }
-  # # trim ls.dist and ls.nbhd so 1 pair <-1:1-> 1 row
-  # if(optns$check11){
-  #   df.resp$idx.pair <- with(
-  #     df.resp,
-  #     sprintf(
-  #       '%s.%s',
-  #       pmin.int(idx.pnt1, idx.pnt2),
-  #       pmax.int(idx.pnt1, idx.pnt2)
-  #     )
-  #   )
-  #   idx.dupp <- base::duplicated(df.resp$idx.pair)
-  #   if(any(idx.dupp)){
-  #     pair.dupp <- df.resp$idx.pair[idx.dupp]
-  #     df.dupp <- df.resp[df.resp$pair %in% pair.dupp, ]
-  #     for(s.pair in pair.dupp){ # check uniqueness of distance
-  #       stopifnot(length(unique(
-  #         (df.dupp$dist)[df.dupp$pair == s.pair]
-  #       )) == 1)
-  #     }
-  #     df.resp <- df.resp[!idx.dupp, ]
+  # df.resp <- data.frame(resp)
+  # names(df.resp) <- c('resp', outer(
+  #   seq(2), seq(ncol(df.resp) %/% 2),
+  #   function(x, y) sprintf('p%se%s', x, y)
+  # ))
+  # df.resp$idx.dist <- seq(nrow(df.resp))
+  # # next: to list, essentially a faster slicing index by split into list
+  # # this template of list is used for faster slicing later
+  # template.ls <- rep(list(NULL), nrow(obsv.coord))
+  # names(template.ls) <- seq_along(template.ls)
+  #
+  # ls.graph <- lapply(seq(ncol(resp) %/% 2), function(idx.edge.set) {
+  #   # browser();QWER
+  #   mat.edge <- as.matrix(df.resp[, 1 + seq(2) + 2 * (idx.edge.set - 1)])
+  #   if(length(unique(mat.edge[, 1]))> length(unique(mat.edge[, 2]))){
+  #     # switch index columns to put the least varying first
+  #     mat.edge <- mat.edge[, c(2, 1)]
   #   }
-  #   idx.mat <- stringr::str_split_fixed(df.resp$idx.pair, '\\.', n = 2)
-  #   df.resp$idx.pnt1 <- as.integer(idx.mat[, 1])
-  #   df.resp$idx.pnt2 <- as.integer(idx.mat[, 2])
-  #   df.resp <- df.resp[with(df.resp, idx.pnt1 < idx.pnt2), ]
-  # }else{
-  #   # # trim anyway. well, can be problematic if doing so
-  #   # df.resp <- df.resp[with(df.resp, idx.pnt1 <= idx.pnt2), ]
-  #   # stopifnot(all(with(df.resp, idx.pnt1 < idx.pnt2))) # may be not needed?
-  #   warning('Potential duplication in df.resp not checked.')
-  # }
+  #   tm <- list(
+  #     mat.edge, df.resp$idx.dist, df.resp$resp,
+  #     deltaCoord(obsv.coord, mat.edge, return.format = 'keep')
+  #   )
+  #   tm <- do.call(cbind, tm) # this is fast enough
+  #   colnames(tm) <- c(
+  #     'p1', 'p2', 'idx.dist', 'resp', sprintf('coordd.%s', seq(d))
+  #   )
+  #
+  #   # split into list
+  #   tm <- split.data.frame(tm, tm[, 'p1'])
+  #   res <- template.ls
+  #   res[names(tm)] <- tm
+  #   return(res)
+  # })
+  # # object.size(ls.graph) / 1024 ^ 2
 
-
-  # for faster slicing later, we translate df.resp into list, for the record,
-  # slicing list is 10 times faster than slicing data.frame, and slicing list
-  # by its index is 100 times faster than slicing by its name. We compute diff
-  # of coord here so as to avoid it being computed multiple times in different
-  # local nbhd when estimating locally, especially local.reach is large creating
-  # overlaps, and when comparing multiple pairs.
-
-  df.resp <- data.frame(resp)
-  names(df.resp) <- c('resp', outer(
-    seq(2), seq(ncol(df.resp) %/% 2),
-    function(x, y) sprintf('p%se%s', x, y)
-  ))
-  df.resp$idx.dist <- seq(nrow(df.resp))
-  # next: to list, essentially a faster slicing index by split into list
-  # this template of list is used for faster slicing later
-  template.ls <- rep(list(NULL), nrow(obsv.coord))
-  names(template.ls) <- seq_along(template.ls)
-
-  ls.graph <- lapply(seq(ncol(resp) %/% 2), function(idx.edge.set) {
-    # browser();QWER
-    mat.edge <- as.matrix(df.resp[, 1 + seq(2) + 2 * (idx.edge.set - 1)])
-    if(length(unique(mat.edge[, 1]))> length(unique(mat.edge[, 2]))){
-      # switch index columns to put the least varying first
-      mat.edge <- mat.edge[, c(2, 1)]
-    }
-    tm <- list(
-      mat.edge, df.resp$idx.dist, df.resp$resp,
-      deltaCoord(obsv.coord, mat.edge, return.format = 'keep')
-    )
-    tm <- do.call(cbind, tm) # this is fast enough
-    colnames(tm) <- c(
-      'p1', 'p2', 'idx.dist', 'resp', sprintf('coordd.%s', seq(d))
-    )
-
-    # split into list
-    tm <- split.data.frame(tm, tm[, 'p1'])
-    res <- template.ls
-    res[names(tm)] <- tm
-    return(res)
-  })
-  # object.size(ls.graph) / 1024 ^ 2
+  ls.graph <- model$graph
+  obsv.coord <- model$coord
 
   ### use diff in coord to determine local nbhd of target points
   target.nbhd <- locWindow(target, obsv.coord, local.reach)
@@ -323,8 +630,8 @@ estiMetric <- function(target, resp, obsv.coord, optns = list()){
     ))
   }
 
-  # estimating for each targetd points
-  ls.res <- lapply(loc.obsv, function(input){
+  # estimating for each targeted points
+  res.locMetric <- lapply(loc.obsv, function(input){
     if(is.list(input)){
       # if comparing
       ls.args <- list(
@@ -341,14 +648,14 @@ estiMetric <- function(target, resp, obsv.coord, optns = list()){
     return(do.call(locMetric, ls.args))
   })
 
-  # return list of local results: estimated metric tensor and obsv
-  loc.res <- list(
-    metric = lapply(ls.res, `[[`, 'mat.g'),
-    optns = optns
-  )
-  if(optns$get.loc.obsv)
-    loc.res$obsv <- loc.obsv
+  # return list of local results: estimated metric tensor only or not
+  if(optns$only.metric)
+    return(lapply(res.locMetric, `[[`, 'mat.g'))
 
+  loc.res <- list(
+    metric = lapply(res.locMetric, `[[`, 'mat.g'),
+    obsv <- loc.obsv, optns = optns
+  )
   return(loc.res)
 
 }

@@ -1,17 +1,56 @@
 # utilities
 
-vecQuadIdx <- function(d){
-  # generate combinations of seq(d) taken 2 at a time
-  # with replacement.
-  # Returns: a 2 X d(d-1)/2 where each column is a
-  # combination.
-  stopifnot(d >= 2)
-  return(cbind(
-    # diag elements
-    t(matrix(seq(d), nrow = d, ncol = 2)),
-    utils::combn(d, 2) # non-diag elements
+#' Index points
+#' @description create a look-up dictionary for input points, predominantly used
+#' to simplify data structure of graphs.
+#' @param pnts a matrix of coordinates of points
+#'
+#' @return a list of the look-up dictionary matrix \code{coord} and an integer
+#' vector \code{idx} indexing the input \code{pnts}.
+#'
+#' @export
+#'
+#' @examples
+#' pnts <- matrix(seq(9), ncol = 3)
+#' pnts <- rbind(pnts, c(1, 4, 7), matrix(rnorm(3 * 2), ncol = 3), c(2, 5, 8))
+#' indexPoints(pnts)
+indexPoints <- function(pnts){
+  # index points for easier edge indexing and return a list
+
+  # DEV ONLY
+  # pnts <- matrix(seq(9), ncol = 3)
+  # pnts <-
+  #   rbind(pnts, c(1, 4, 7), matrix(rnorm(3 * 100), ncol = 3), c(2, 5, 8))
+  # END DEV ONLY
+
+  if(!is.matrix(pnts)) pnts <- matrix(pnts, nrow = 1)
+  coord <- pnts
+  idx.unique <- !base::duplicated(coord, MARGIN = 1, )
+  coord <- coord[idx.unique, , drop = F]
+  # if unique, idx + 1, otherwise still
+  res.idx <- cumsum(idx.unique)
+  # match those not unique
+  dup.idx <- match(
+    apply(pnts[!idx.unique, , drop = F], 1, paste, collapse = ' '),
+    apply(coord, 1, paste, collapse = ' ')
+  )
+
+  res.idx[!idx.unique] <- dup.idx
+  return(list(
+    idx = res.idx, coord = coord
   ))
 }
+# microbenchmark::microbenchmark(list = alist(
+#   string = match( # faster
+#     apply(pnts[!idx.unique, , drop = F], 1, paste, collapse = ' '),
+#     apply(coord, 1, paste, collapse = ' ')
+#   ),
+#   asplit = match(
+#     asplit(pnts[!idx.unique, , drop = F], 1),
+#     asplit(coord, 1)
+#   )
+# ))
+
 
 #' Random generator for a local graph
 #'
@@ -51,6 +90,84 @@ genGraph <- function(n, coord, local.reach){
   return(res)
 }
 
+#' Random generate for edges comparison in local graph
+#'
+#' @param n number of comparison
+#' @param edge a list or matrix of edges
+#'
+#' @return a n-by-4 matrix
+#' @export
+#'
+#' @details Uses a two-phase generation scheme, where we pick the primary
+#' edges, then the secondary ones are selected by looking at nodes connected to
+#' the primary ones.
+#' \code{n} can be length 1 or 2, if length 2, the second number is used in
+#' second phase for multiple comparison. It is possible that the resulting
+#' sample is fewer than requested (especially with sparse graph), in which case
+#' one should consider use larger \code{n[2]}.
+#' \cr
+#' Besides, for unique labeling edges in the resulting matrix, its first column
+#' will be smaller than the second column; the third column smaller than the
+#' fourth and the first column; and the second column smaller than the fourth
+#' column.
+#'
+#' #' @examples
+#' d <- 3
+#' manifold <- spaceEuclidean(d)
+#' set.seed(1)
+#' obsv.coord <- manifold$genPnt(10)
+#' all.edge <- allEdge(obsv.coord, local.reach = 0.5)
+#' all.edge <- all.edge[all.edge[, 1] < all.edge[, 2], ]
+#' plotGraph(obsv.coord, all.edge)
+#' genCompareGraph(10, all.edge)
+genCompareGraph <- function(n, edge){
+
+  if(length(n) == 1)
+    n <- c(n, 1)
+  stopifnot(all(n >= 1))
+
+  # genenrate graph comparing edges
+  mat.edge <- formatGraph(edge, format_to = 'matrix')
+  mat.edge <- mat.edge[mat.edge[, 1] != mat.edge[, 2], , drop = F]
+  mat.edge <- t(apply(mat.edge, 1, sort)) # for later uniqueness
+  tm <- formatGraph(mat.edge, format_to = 'list')
+  ls.edge <- rep(list(NULL), max(mat.edge))
+  names(ls.edge) <- seq_along(ls.edge)
+  ls.edge[names(tm)] <- tm
+
+  primary.edge <- mat.edge[
+    sort(sample.int(
+      nrow(mat.edge) - 1,
+      size = min(nrow(mat.edge) - 1, 2 * n[1])
+    )), , drop = F
+  ]
+
+  secondary.edge <- lapply(asplit(primary.edge, 1), function(edge.1){
+    # browser();QWER
+    # # compare randomly others, could be far away
+    # edge.option <- ls.edge[seq(edge.1[1], length(ls.edge))]
+    # compare nearby
+    node.option <- setdiff(unique(unlist(ls.edge[edge.1])), edge.1)
+    edge.option <- ls.edge[node.option]
+    edge.option <- lapply(edge.option, function(x) x[x > edge.1[2]])
+    edge.option <- formatGraph(edge.option, format_to = 'matrix')
+    n.option <- nrow(edge.option)
+    edge.2 <-
+      edge.option[sample.int(n.option, size = min(n.option, n[2])), , drop = F]
+    res <- matrix(0L, ncol = 4, nrow = nrow(edge.2))
+    res[, seq(2)] <- rep(edge.1, each = nrow(res))
+    res[, 2 + seq(2)] <- edge.2
+    return(res)
+  })
+
+  res <- do.call(rbind, secondary.edge)
+  if(nrow(res) < prod(n))
+    warning('limited choices, consider increase n[2].')
+  res <- res[sort(sample.int(
+    nrow(res), size = min(nrow(res), prod(n)))
+  ), , drop = F]
+  return(res)
+}
 
 #' get all possible local edge
 #'
@@ -114,7 +231,7 @@ allEdge <- function(coord, local.reach){
     tm.res[n] <- n # for completeness
   }else{
     # smaller, rcpp faster, very weird...
-    tm.res <- locWindow_cpp(
+    tm.res <- allEdge_cpp(
       coord, local.reach,
       apply(coord, 2, order), apply(coord, 2, rank, ties.method = 'first')
     ) # now it is a list
@@ -141,7 +258,7 @@ allEdge <- function(coord, local.reach){
 #   if(length(local.reach) == 1)
 #     local.reach <- rep(local.reach, ncol(coord))
 #
-#   res <- locWindow_cpp(
+#   res <- allEdge_cpp(
 #     coord, local.reach,
 #     apply(coord, 2, order), apply(coord, 2, rank, ties.method = 'first')
 #   ) # now it is a list
@@ -177,7 +294,7 @@ allEdge <- function(coord, local.reach){
 #' change format of a graph (edge)
 #'
 #' @param graph a list or matrix of edges of the graph
-#' @param format \code{"matrix"} or \code{"list"}, the target format, if
+#' @param format_to \code{"matrix"} or \code{"list"}, the target format, if
 #' missing, will toggle the input type, i.e., change \code{matrix} input to
 #' \code{list}, and vise versa
 #' @param ... additional argument passed to \code{edgeMat2List}
@@ -193,17 +310,17 @@ allEdge <- function(coord, local.reach){
 #' edge.list <- locWindow(c(0, 0), coord, 0.5, 'list')
 #' identical(formatGraph(edge.mat), edge.list)
 #' identical(formatGraph(edge.list), edge.mat)
-formatGraph <- function(graph, format, ...){
+formatGraph <- function(graph, format_to, ...){
 
   stopifnot( inherits(graph, c('matrix', 'list')) )
-  if(missing(format)){
-    format <- setdiff(c('matrix', 'list'), class(graph))
+  if(missing(format_to)){
+    format_to <- setdiff(c('matrix', 'list'), class(graph))
   }else{
-    format <- match.arg(format, c('matrix', 'list'))
-    if(inherits(graph, format)) return(graph)
+    format_to <- match.arg(format_to, c('matrix', 'list'))
+    if(inherits(graph, format_to)) return(graph)
   }
 
-  if(format == 'matrix')
+  if(format_to == 'matrix')
     return(edgeList2Mat(graph))
   else
     return(edgeMat2List(graph, ...))

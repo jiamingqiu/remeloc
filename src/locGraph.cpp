@@ -10,7 +10,7 @@ IntegerVector orderStable(NumericVector x);
 IntegerVector rankCpp(NumericVector x);
 
 // [[Rcpp::export]]
-List locWindow_cpp(
+List allEdge_cpp(
     NumericMatrix coord, NumericVector local_reach,
     IntegerMatrix marginOrder, IntegerMatrix marginRank
 ) {
