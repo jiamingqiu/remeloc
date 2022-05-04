@@ -162,6 +162,7 @@ guess_model <- function(optns = list(), formula, data, ...){
     n.edges <- 1 + length(stringr::str_extract_all(
       deparse(formula, width.cutoff = 200L), ':'
     )[[1]])
+    if(!(n.edges %in% c(2, 4))) stop('formula: incorrect number of edges.')
     if(n.edges == 2){
       guess.optns$type <- 'distance'
     }else{
@@ -193,6 +194,7 @@ guess_model <- function(optns = list(), formula, data, ...){
 
 }
 
+##### Core functions ###########################################################
 
 #' Fit model for local metric
 #'
@@ -495,7 +497,7 @@ fitMetric <- function(formula, data, coord, optns = list()){
   ls.graph <- lapply(seq(ncol(resp) %/% 2), function(idx.edge.set) {
     # browser();QWER
     mat.edge <- as.matrix(df.resp[, 1 + seq(2) + 2 * (idx.edge.set - 1)])
-    if(length(unique(mat.edge[, 1]))> length(unique(mat.edge[, 2]))){
+    if(length(unique(mat.edge[, 1])) > length(unique(mat.edge[, 2]))){
       # switch index columns to put the least varying first
       mat.edge <- mat.edge[, c(2, 1)]
     }
@@ -517,7 +519,7 @@ fitMetric <- function(formula, data, coord, optns = list()){
 
   res <- list(
     graph = ls.graph, coord = obsv.coord,
-    resp = df.resp, optns = optns
+    resp = df.resp, formula = formula, optns = optns
   )
   class(res) <- c('metricModel', class(res))
 
@@ -666,15 +668,20 @@ estiMetric <- function(target, model, resp, obsv.coord, optns = list()){
   }
 
   ### check options
-  optns <- model$optns
+  # browser()
+  optns <- do.call(set_optns, c(list(optns = model$optns), optns))
+
   if(is.null(optns$local.reach)){
     # approx. 1000 pnts in each nbhd, if target & obsv unif in a square
     optns$local.reach <-
       abs( prod( apply( model$coord, 2, function(x) { diff(range(x)) }) ) ) /
       (nrow(model$coord) / 1000)
   }
-  optns <- set_optns(optns)
-  optns <- guess_model(optns, formula = formula, data = resp)
+
+  # # those have been checked in fitMetric
+  # optns <- set_optns(optns)
+  # optns <- guess_model(optns, formula = model$formula, data = resp)
+
   # if(is.null(optns$n.local)){
   #   optns$n.local <- c(10, 1000)
   # }
@@ -835,7 +842,7 @@ estiMetric <- function(target, model, resp, obsv.coord, optns = list()){
 
   loc.res <- list(
     metric = lapply(res.locMetric, `[[`, 'mat.g'),
-    obsv <- loc.obsv, optns = optns
+    obsv = loc.obsv, optns = optns
   )
   return(loc.res)
 
@@ -1015,12 +1022,13 @@ locMetric <- function(y, coord.diff, optns = list()){
   if(optns$intercept == TRUE){
     vec.g <- vec.g[-1] # remove fitted intercept from estimated metric
   }
-  # translate to metric tensor
-  mat.g <- matrix(0, coord.d, coord.d)
-  mat.g[lower.tri(mat.g, diag = FALSE)] <- #lower.tri since symmetric
-    vec.g[-seq(coord.d)] / 2
-  mat.g <- t(mat.g) + mat.g
-  diag(mat.g) <- vec.g[seq(coord.d)]
+  # # translate to metric tensor
+  # mat.g <- matrix(0, coord.d, coord.d)
+  # mat.g[lower.tri(mat.g, diag = FALSE)] <- #lower.tri since symmetric
+  #   vec.g[-seq(coord.d)] / 2
+  # mat.g <- t(mat.g) + mat.g
+  # diag(mat.g) <- vec.g[seq(coord.d)]
+  mat.g <- vec2SymMat(vec.g)
 
   return(list(
     mat.g = mat.g,

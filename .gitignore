@@ -8,3 +8,4 @@
 !*.tex
 !*.bib
 .Rproj.user
+inst/doc

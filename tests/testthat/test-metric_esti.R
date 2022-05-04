@@ -1,18 +1,53 @@
 # Core functions for metric estimation
 
+test_that('options and model guessing', {
+
+  expect_setequal(
+    names(guess_model()), c(
+      'method.trim', 'n.local', 'metric.only', 'type', 'intercept'
+    )
+  )
+  expect_identical(set_optns(method.trim = 'random')$method.trim, 'random')
+  expect_identical(
+    guess_model(formula = y ~ p1:p2)[c('type', 'intercept')],
+    list(type = 'distance', intercept = FALSE)
+  )
+  expect_identical(
+    guess_model(formula = y ~ (x1 + x2):(z1 + z2))[c('type', 'intercept')],
+    list(type = 'distance', intercept = FALSE)
+  )
+  expect_identical(
+    guess_model(formula = y ~ p1:p2:p3:p4)[c('type', 'intercept')],
+    list(type = 'compare', intercept = FALSE)
+  )
+  expect_identical(
+    guess_model(
+      formula = y ~ (e1x1 + e1x2):(e2x1 + e2x2):(e3x1 + e3x2):(e4x1 + e4x2)
+    )[c('type', 'intercept')],
+    list(type = 'compare', intercept = FALSE)
+  )
+  expect_error(
+    guess_model(
+      formula = y ~ (e1x1 + e1x2):(e2x1 + e2x2):(e3x1 + e3x2)
+    )
+  )
+
+})
+
 test_that('fitMetric and estiMetric', {
 
   d <- 3
   manifold <- spaceEuclidean(d)
+  # manifold <- spaceHyperbolic(d, r = 5)
   set.seed(1)
   obsv.coord <- manifold$genPnt(10^4)
   all.edge <- allEdge(obsv.coord, local.reach = 0.2)
   idx.edge <- all.edge[all.edge[, 1] != all.edge[, 2], , drop = F]
-  idx.edge <- idx.edge[sample.int(nrow(idx.edge), 10^5), , drop = F]
+  idx.edge <- idx.edge[sample.int(nrow(idx.edge), 5 * 10^5), , drop = F]
   sqdist <- manifold$dist(
     obsv.coord[idx.edge[, 1], ], obsv.coord[idx.edge[, 2], ]
   ) ^ 2
-
+  # sqdist %>% hist
   # input coord in data
   data.w.coord <- cbind(
     sqdist, obsv.coord[idx.edge[, 1], ], obsv.coord[idx.edge[, 2], ]
@@ -39,7 +74,8 @@ test_that('fitMetric and estiMetric', {
   )
 
   set.seed(10)
-  target <- matrix(runif(d * 10), ncol = d)
+  # target <- matrix(runif(d * 10), ncol = d)
+  target <- manifold$genPnt(10) * 0.8
   true.metric <- apply(target, 1, manifold$metric, simplify = F)
 
   # interchangeable model
@@ -47,7 +83,10 @@ test_that('fitMetric and estiMetric', {
     estiMetric(target, fit.w.coord), estiMetric(target, fit.w.idx)
   )
 
-  esti.metric <- estiMetric(target, fit.w.coord)
+  fit <- fitMetric(formula.w.idx, data.w.idx, coord = obsv.coord, optns = list(
+    local.reach = 0.2, n.local = c(10, 10^5)
+  ))
+  esti.metric <- estiMetric(target, fit)
   names(esti.metric) <- NULL
 
   # check symmetric and positive definite
@@ -67,13 +106,10 @@ test_that('fitMetric and estiMetric', {
   dat.binary$y <- rbinom(nrow(dat.binary), 1, prob = dat.binary$y)
   # dat.binary$y %>% table()
   fit.binary <- fitMetric(formula.w.coord, dat.binary,optns = list(
-    local.reach = 0.5, n.local = Inf, method.trim = 'proximity'
+    local.reach = 0.2, n.local = Inf, method.trim = 'proximity'
     , type = 'thre', intercept = TRUE
   ))
-  set.seed(10)
-  target <- manifold$genPnt(10)
-  true.metric <- apply(target, 1, manifold$metric, simplify = F)
-  true.metric <- lapply(true.metric, function(x) 20 * x)
+  true.metric.binary <- lapply(true.metric, function(x) 20 * x)
   esti.metric <- estiMetric(target, fit.binary)
   names(esti.metric) <- NULL
   # check symmetric and positive definite
@@ -83,11 +119,11 @@ test_that('fitMetric and estiMetric', {
     all(eig.val$values >= 0)
   })))
   # check estimation accuracy, not so well, honestly.
-  expect_equal(esti.metric, true.metric, tolerance = 0.125)
+  expect_equal(esti.metric, true.metric.binary, tolerance = 0.35)
 
   ### comparing edges
   set.seed(1)
-  comp.edge <- genCompareGraph(c(500, 500), all.edge)
+  comp.edge <- genCompareGraph(c(500, 1000), all.edge)
   sq.dist <- list(
     manifold$dist(
       obsv.coord[comp.edge[, 1], ], obsv.coord[comp.edge[, 2], ]
@@ -98,6 +134,7 @@ test_that('fitMetric and estiMetric', {
     ) ^ 2
   )
   arr.prob <- sigmoid.f(25 * do.call(`-`, sq.dist))
+  # arr.prob <- sigmoid.f(do.call(`-`, sq.dist))
   # arr.prob %>% hist
   set.seed(1)
   dat.compare <- data.frame(
@@ -108,8 +145,8 @@ test_that('fitMetric and estiMetric', {
   # dat.compare %>% head
   fit.compare <- fitMetric(
     y ~ p1:p2:p3:p4, dat.compare, obsv.coord, optns = list(
-      local.reach = 0.5
-      , n.local = 10^4, method.trim = 'proximity'
+      local.reach = 0.25
+      , n.local = 10^5, method.trim = 'proximity'
       # , type = 'comp', intercept = FALSE
     )
   )
@@ -124,9 +161,10 @@ test_that('fitMetric and estiMetric', {
   # )
 
   set.seed(10)
-  target <- manifold$genPnt(10)
-  true.metric <- apply(target, 1, manifold$metric, simplify = F)
-  true.metric <- lapply(true.metric, function(x) 25 * x)
+  # target <- manifold$genPnt(10)
+  # true.metric.compare <- apply(target, 1, manifold$metric, simplify = F)
+  true.metric.compare <- lapply(true.metric, function(x) 25 * x)
+  # true.metric.compare <- lapply(true.metric, function(x) x)
   esti.metric <- estiMetric(target, fit.compare)
   names(esti.metric) <- NULL
   # check symmetric and positive definite
@@ -136,13 +174,13 @@ test_that('fitMetric and estiMetric', {
     all(eig.val$values >= 0)
   })))
   # check estimation accuracy, not so well, honestly.
-  expect_equal(esti.metric, true.metric, tolerance = 0.05)
+  expect_equal(esti.metric, true.metric.compare, tolerance = 0.25)
 
 })
 
 test_that("locMetric", {
 
-  d <- 3
+  d <- 2
 
   ## Euclidean space
   set.seed(1)
@@ -151,7 +189,7 @@ test_that("locMetric", {
   # pairing points
   idx.dist <- t(utils::combn(nrow(coord.pnts), 2))
   idx.dist <- idx.dist[
-    sample(nrow(idx.dist), size = 25000),
+    sample(nrow(idx.dist), size = 50000),
   ]
   coord.diff <-
     coord.pnts[idx.dist[, 1], ] - coord.pnts[idx.dist[, 2], ]
@@ -181,23 +219,23 @@ test_that("locMetric", {
     )$mat.g
     , tolerance = 5e-3
   )
-  # binary thresholding
+  # binary thresholding ###############
   expect_equal(
     diag(rep(1, d)),
     locMetric(
       arr.thre, coord.diff
       , optns = list(type = 't', intercept = FALSE)
     )$mat.g
-    , tolerance = 0.065 #0.275
+    , tolerance = 0.07 #0.275
   )
-  # binary thresholding w/ intercept
+  # binary thresholding w/ intercept ###################
   expect_equal(
     diag(rep(1, d)),
     locMetric(
       arr.thre.itcpt, coord.diff
       , optns = list(type = 't', intercept = TRUE)
     )$mat.g
-    , tolerance = 0.045
+    , tolerance = 0.065
   )
 
   # comparing distance

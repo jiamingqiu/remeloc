@@ -1,6 +1,76 @@
 # functions for visualization
 # suggested: tidyverse
 
+approxfunMetric <- function(coord, metric){
+  # create approximating (interpolation) function of metric
+  # use locfit for now, not good (too smooth), high-d interpolation TBD
+
+  stopifnot(nrow(coord) > 2)
+
+  # plt.grid <- manifold$genGrid(64)
+  if(is.list(metric)){
+    ls.metric <- metric
+  }else{
+    ls.metric <- apply(coord, 1, metric, simplify = F)
+  }
+  d <- ncol(coord)
+  vec.met <- sapply(ls.metric, symMat2Vec) # 1col = 1metric
+  dat.coord <- as.data.frame(coord)
+  names(dat.coord) <- sprintf('x%s', seq(d))
+
+  # fit local polynomial
+  ls.fit <- apply(vec.met, 1, function(arr.comp) {
+    w.dat <- dat.coord
+    w.dat$y <- arr.comp
+    do.call(locfit::locfit, c(list(
+      formula = as.formula(sprintf(
+        'y ~ locfit::lp(%s)', paste(names(dat.coord), collapse = ',')
+      )),
+      data = w.dat
+    )))
+  })
+
+  # construct return function
+  res.f <- function(target){
+
+    # interpolated metric, target: 1point, returns a matrix
+
+    if(!is.matrix(target)) target <- matrix(target, nrow = 1)
+    stopifnot(ncol(target) == d)
+    # # for the moment
+    # stopifnot(nrow(target) > 1)
+
+    new.dat <- as.data.frame(target)
+    names(new.dat) <- sprintf('x%s', seq(d))
+    n.target <- nrow(new.dat)
+
+    mat.pred <- sapply(ls.fit, function(fit){
+      # arr.pred <- rep(NA, n.target)
+      arr.pred <- locfit:::predict.locfit(fit, newdata = new.dat)
+      stopifnot(length(arr.pred) == n.target)
+      return(arr.pred)
+    }) # 1col = 1 component func, 1row = 1target pnt
+    if(n.target == 1) mat.pred <- matrix(mat.pred, nrow = 1)
+
+    ls.res <- apply(mat.pred, 1, vec2SymMat, simplify = F)
+
+    if(n.target == 1)
+      return(ls.res[[1]])
+    else
+      return(ls.res)
+
+  }
+
+  return(res.f)
+}
+
+getMetricEllipsoid <- function(coord, metric, ...){
+  # create data.frame of ellipsoid for plotting
+  # TBD
+  car::ellipse(coord, mat.met, radius = 100, draw = F)
+  return(NULL)
+}
+
 #' plot graph (edges) on coordinates
 #'
 #' @param coord n-by-d matrix of coordinates, one row for one point
@@ -124,3 +194,58 @@ plotGraph <- function(coord, edge, get.plt.dat = F, max.n.edge = 500){
   return(plt)
 
 }
+
+
+#' get data frame from metric for plotting
+#'
+#' @param coord a matrix of targeted points
+#' @param metric metric function or a list of metric at \code{coord}
+#'
+#' @return a data.frame
+#' @export
+#'
+#' @examples
+#' df <- with(spaceHyperbolic(d = 2, model = 'half'), {
+#'   getMetricDF(genGrid(10) + 1, metric)
+#' })
+#' ggplot2::ggplot(df) +
+#'   ggplot2::geom_tile(ggplot2::aes(x = x1, y = x2, fill = value)) +
+#'   ggplot2::facet_wrap(~ component, labeller = ggplot2::label_both) +
+#'   ggplot2::coord_fixed()
+getMetricDF <- function(coord, metric){
+
+  # get a data.frame for metric at coord, metric can be a list of matrices
+
+  # plt.grid <- manifold$genGrid(64)
+  if(is.list(metric)){
+    ls.metric <- metric
+  }else{
+    ls.metric <- apply(coord, 1, metric, simplify = F)
+  }
+  d <- ncol(coord)
+
+  stopifnot(all(
+    sapply(ls.metric, function(x) identical(dim(x), rep(d, 2)) )
+  ))
+
+  df.metric <- t(sapply(ls.metric, symMat2Vec)) # one row = one point
+  df.metric <- as.data.frame(df.metric)
+  # add coordinates
+  df.metric <- cbind(coord, df.metric)
+  # names
+
+  idx.vec <- vecQuadIdx(d)
+  names(df.metric) <- c(
+    sprintf('x%s', seq(d)),
+    sprintf('dx%sdx%s', idx.vec[1, ], idx.vec[2, ])
+  )
+
+  df.metric <- tidyr::pivot_longer(df.metric, cols = tidyselect::all_of(
+    sprintf('dx%sdx%s', idx.vec[1, ], idx.vec[2, ])
+  ), names_to = 'component', values_to = 'value')
+
+  return(df.metric)
+
+}
+
+

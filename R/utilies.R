@@ -58,6 +58,7 @@ indexPoints <- function(pnts){
 #' @param coord matrix of coordinates, one row for one point
 #' @param local.reach approximate size of local neighborhood
 #' (treated as Euclidean space)
+#' @param exact whether to call \code{allEdge} and select from all local edges
 #'
 #' @return a n-by-2 matrix for indices of edge, one row for one edge.
 #' @details will based on coordinates, i.e., no edge if coordinates are too far
@@ -66,12 +67,15 @@ indexPoints <- function(pnts){
 #'
 #' @examples
 #' set.seed(1)
-#' d <- 3
+#' d <- 2
 #' coord <- matrix(runif(d * 50), ncol = d)
 #' graph <- genGraph(10, coord, local.reach = 0.5)
 #' plotGraph(coord, graph)
-genGraph <- function(n, coord, local.reach){
+#' plotGraph(coord, genGraph(10, coord, local.reach = 0.5, T))
+#' plotGraph(coord, genGraph(100, coord, local.reach = 0.2))
+genGraph <- function(n, coord, local.reach, exact = F){
 
+  # browser();QWER
   if(!is.matrix(coord))
     stop('need more than 1 points.')
   stopifnot(all(local.reach >= 0))
@@ -80,12 +84,82 @@ genGraph <- function(n, coord, local.reach){
 
   coord.pnts <- coord
 
-  # index of all possible pairs within range of local.reach
-  all.edge <- allEdge(coord, local.reach)
-  all.edge <- all.edge[all.edge[, 1] != all.edge[, 2], ]
-  res <- all.edge[
-    sample(nrow(all.edge), size = n), , drop = F
-  ]
+  if(exact){
+    # index of all possible pairs within range of local.reach
+    all.edge <- allEdge(coord, local.reach)
+    all.edge <- all.edge[all.edge[, 1] != all.edge[, 2], ]
+    if(nrow(all.edge) < n) warning(
+      'fewer candidate than requested, try larger local.reach'
+    )
+    res <- all.edge[
+      sort(sample.int(nrow(all.edge), size = min(n, nrow(all.edge)))), ,
+      drop = F
+    ]
+
+  }else{
+
+    max.iter <- 100
+    iter <- 0
+    res <- matrix(nrow = 0, ncol = 2)
+
+    while(nrow(res) < n & iter < max.iter){
+
+      iter <- iter + 1
+
+      # store index for later recovery
+      use.idx <- sort(sample.int(nrow(coord), size = min(10^4, nrow(coord))))
+
+      use.coord <- coord[use.idx, , drop = F]
+      suppressWarnings({
+        use.edge <-
+          genGraph(n = n, use.coord, local.reach = local.reach, exact = T)
+      })
+
+      # translate index
+      use.edge[, 1] <- use.idx[use.edge[, 1]]
+      use.edge[, 2] <- use.idx[use.edge[, 2]]
+
+      res <- rbind(res, use.edge)
+
+      res <- res[
+        !base::duplicated(sprintf('%s - %s', res[, 1], res[, 2])), , drop = F
+      ]
+      res <- res[order(res[, 1]), ]
+
+    }
+    # root.pnt <- apply(coord, 2, function(x){
+    #   seq(min(x) + local.reach / 2, max(x), by = local.reach / 2)
+    # }, simplify = F)
+    #
+    # root.pnt <- as.matrix(do.call(expand.grid, root.pnt))
+    #
+    # # plot(coord)
+    # # points(root.pnt, col = 'red')
+    #
+    # ls.nbhd <- locWindow(root.pnt, coord, local.reach / 2, return = 'list')
+    # # drop those with fewer than 2 points
+    # ls.nbhd <- ls.nbhd[sapply(ls.nbhd, length) >= 2]
+    # # sample proportion in each local window
+    # sample.prop <-
+    #   n / sum(sapply(ls.nbhd, function(x) length(combn(length(x), 2))))
+    # res <- lapply(ls.nbhd, function(x){
+    #   idx <- combn(length(x), 2)
+    #   idx <- idx[, sort(sample.int( # sort for uniqueness
+    #     ncol(idx), size = min(ceiling(ncol(idx) * sample.prop * 3), ncol(idx))
+    #   )), drop = F]
+    #   return(cbind(x[idx[1, ]], x[idx[2, ]]))
+    # })
+    # res <- do.call(rbind, res)
+    #
+    # size
+    if(nrow(res) < n) stop(
+      'fewer candidate than requested, try exact method or larger local.reach'
+    )
+    res <- res[sort(sample.int(nrow(res), size = n)), , drop = F]
+
+    # sort
+    res <- res[order(res[, 1]), ]
+  }
 
   return(res)
 }
@@ -120,54 +194,79 @@ genGraph <- function(n, coord, local.reach){
 #' all.edge <- all.edge[all.edge[, 1] < all.edge[, 2], ]
 #' plotGraph(obsv.coord, all.edge)
 #' genCompareGraph(10, all.edge)
-genCompareGraph <- function(n, edge){
+genCompareGraph <- function(n, edge, coord, local.reach){
 
   if(length(n) == 1)
     n <- c(n, 1)
   stopifnot(all(n >= 1))
-
   # genenrate graph comparing edges
   mat.edge <- formatGraph(edge, format_to = 'matrix')
   mat.edge <- mat.edge[mat.edge[, 1] != mat.edge[, 2], , drop = F]
   mat.edge <- t(apply(mat.edge, 1, sort)) # for later uniqueness
-  tm <- formatGraph(mat.edge, format_to = 'list')
-  ls.edge <- rep(list(NULL), max(mat.edge))
-  names(ls.edge) <- seq_along(ls.edge)
-  ls.edge[names(tm)] <- tm
 
-  primary.edge <- mat.edge[
-    sort(sample.int(
-      nrow(mat.edge) - 1,
-      size = min(nrow(mat.edge) - 1, 2 * n[1])
-    )), , drop = F
-  ]
+  if(missing(coord) & missing(local.reach)){
 
-  secondary.edge <- lapply(asplit(primary.edge, 1), function(edge.1){
-    # browser();QWER
-    # # compare randomly others, could be far away
-    # edge.option <- ls.edge[seq(edge.1[1], length(ls.edge))]
-    # compare nearby
-    node.option <- setdiff(unique(unlist(ls.edge[edge.1])), edge.1)
-    edge.option <- ls.edge[node.option]
-    edge.option <- lapply(edge.option, function(x) x[x > edge.1[2]])
-    edge.option <- formatGraph(edge.option, format_to = 'matrix')
-    n.option <- nrow(edge.option)
-    edge.2 <-
-      edge.option[sample.int(n.option, size = min(n.option, n[2])), , drop = F]
-    res <- matrix(0L, ncol = 4, nrow = nrow(edge.2))
-    res[, seq(2)] <- rep(edge.1, each = nrow(res))
-    res[, 2 + seq(2)] <- edge.2
+    # if sampling only using edge specification, slow
+
+    tm <- formatGraph(mat.edge, format_to = 'list')
+    ls.edge <- rep(list(NULL), max(mat.edge))
+    names(ls.edge) <- seq_along(ls.edge)
+    ls.edge[names(tm)] <- tm
+
+    primary.edge <- mat.edge[
+      sort(sample.int(
+        nrow(mat.edge) - 1,
+        size = min(nrow(mat.edge) - 1, 2 * n[1])
+      )), , drop = F
+    ]
+
+    secondary.edge <- lapply(asplit(primary.edge, 1), function(edge.1){
+      # browser();QWER
+      # # compare randomly others, could be far away
+      # edge.option <- ls.edge[seq(edge.1[1], length(ls.edge))]
+      # compare nearby
+      node.option <- setdiff(unique(unlist(ls.edge[edge.1])), edge.1)
+      edge.option <- ls.edge[node.option]
+      edge.option <- lapply(edge.option, function(x) x[x > edge.1[2]])
+      edge.option <- formatGraph(edge.option, format_to = 'matrix')
+      n.option <- nrow(edge.option)
+      edge.2 <- edge.option[
+        sample.int(n.option, size = min(n.option, n[2])), , drop = F
+      ]
+      res <- matrix(0L, ncol = 4, nrow = nrow(edge.2))
+      res[, seq(2)] <- rep(edge.1, each = nrow(res))
+      res[, 2 + seq(2)] <- edge.2
+      return(res)
+    })
+
+    res <- do.call(rbind, secondary.edge)
+    if(nrow(res) < prod(n))
+      warning('limited choices, consider increase n[2].')
+    res <- res[sort(sample.int(
+      nrow(res), size = min(nrow(res), prod(n)))
+    ), , drop = F]
     return(res)
-  })
 
-  res <- do.call(rbind, secondary.edge)
-  if(nrow(res) < prod(n))
-    warning('limited choices, consider increase n[2].')
-  res <- res[sort(sample.int(
-    nrow(res), size = min(nrow(res), prod(n)))
-  ), , drop = F]
-  return(res)
+  }else{
+
+    # if also providing additional information, can be faster
+    # ad hoc coordinates for edges
+
+    pseudo.coord <- (coord[mat.edge[, 1], ] + coord[mat.edge[, 2], ]) / 2
+
+    # too slow
+    # pseudo.edge <- allEdge(pseudo.coord, local.reach = local.reach)
+    # pseudo.edge <- pseudo.edge[pseudo.edge[, 1] != pseudo.edge[, 2], , drop = F]
+    # pseudo.edge <-
+    #   pseudo.edge[sample.int(nrow(pseudo.edge), prod(n)), , drop = F]
+    pseudo.edge <- genGraph(prod(n), pseudo.coord, local.reach = local.reach)
+    res <- cbind(mat.edge[pseudo.edge[, 1], ], mat.edge[pseudo.edge[, 2], ])
+
+    return(res)
+
+  }
 }
+
 
 #' get all possible local edge
 #'
