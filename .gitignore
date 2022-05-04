@@ -9,5 +9,5 @@
 !*.bib
 .Rproj.user
 inst/doc
-!/doc/
+!/doc/*.html
 /Meta/
