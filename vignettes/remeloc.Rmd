@@ -90,6 +90,7 @@ system.time({
 
 
 Now we can inspect the estimated Riemannian metric tensor.
+First, inspect the component functions.
 
 ```{r, fig.width=6.5, fig.height=6.5}
 df.esti.metric <- getMetricDF(target, esti.metric)
@@ -113,7 +114,34 @@ map.esti <- df.esti.metric %>% mutate(what = 'esti') %>%
 map.esti
 ```
 
-We can also consider the geodesic. 
+We can also look at equal geodesic ellipses. The following ellipses are plotting
+$\{x: (x - p)^T G(p) (x - p) = c\}$ for given center point $p$ and metric tensor matrix $G(p)$. The constant $c$ is the prespecified geodesic distance to travel.
+
+```{r, fig.width=4, fig.height=4}
+colnames(target) <- c('x1', 'x2')
+df.ell <- getMetricEllipsoid(target, esti.metric, radius = 0.2) %>% 
+  mutate(what = 'esti') %>% bind_rows(getMetricEllipsoid(
+    target, apply(target, 1, manifold$metric, simplify = F), radius = 0.2
+  ) %>% mutate(what = 'true')) %>% 
+  mutate(what = factor(what, levels = c('true', 'esti')))
+# index the row and column of points
+idx.xy <- apply(target, 2, function(x) match(x, sort(unique(x))))
+idx.xy <- as.data.frame(idx.xy) %>% mutate(idx.pnt = row_number()) %>% 
+  setNames(c('idx.x', 'idx.y', 'idx.pnt')) %>% as_tibble
+df.ell <- df.ell %>% left_join(idx.xy, by = 'idx.pnt') %>% as_tibble
+
+map.ell <- df.ell %>% 
+  filter(idx.x %% 16 == 0, idx.y %% 16 == 0) %>% 
+  ggplot() + 
+  geom_path(aes(
+    x = x1, y = x2, linetype = what, color = what,
+    group = interaction(idx.pnt, what)
+  )) +
+  coord_fixed(ratio = 1)
+map.ell
+```
+
+Next, consider the geodesic curve. 
 However, the current estimate is locally constant with zero derivatives, which means one cannot plug the "estiMetric" directly into "getGeodesic" function, additional interpolation step is needed. 
 Currently the "approxfunMetric" uses local polynomial to provide a smoothed estimated tensor. However, it is not interpolation, be careful when using it.
 

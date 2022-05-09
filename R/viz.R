@@ -64,11 +64,90 @@ approxfunMetric <- function(coord, metric){
   return(res.f)
 }
 
-getMetricEllipsoid <- function(coord, metric, ...){
-  # create data.frame of ellipsoid for plotting
-  # TBD
-  car::ellipse(coord, mat.met, radius = 100, draw = F)
-  return(NULL)
+#' draw ellipses of equal geodesic distance to center points
+#'
+#' @param coord matrix of centers, 1 row is 1 point
+#' @param metric list of metric matrices or a function
+#' @param radius radius for \code{car::ellipse}, missing then 1
+#' @param ... additional arguments for \code{car::ellipse}
+#'
+#' @return a data frame whose first column is row number of \code{coord}, while
+#' the rest are coordinates.
+#'
+#' @export
+#'
+#' @details For a given center point \eqn{p} and metric tensor \eqn{G},
+#' provide points \eqn{(x - p)^T G (x - p) = c} where \eqn{c} is a constant
+#' determined by \code{radius}.
+#' \cr
+#' Note that this function does not solve for geodesic curves, and the "equal
+#' geodesic distance" is computed by local Euclidean approximation, which means
+#' one shall not use this for large domain characterization.
+#'
+#' @examples
+#' df.ell <- getMetricEllipsoid(rep(0, 2), diag(c(1, 5)), radius = 1)
+#' head(df.ell)
+#' ggplot2::ggplot(df.ell, ggplot2::aes(x, y, group = idx.pnt)) +
+#'   ggplot2::geom_path() + ggplot2::coord_fixed()
+#' df.ell <- getMetricEllipsoid(
+#'   matrix(seq(4), 2, 2),
+#'   list(diag(c(1, 5)), diag(c(1, 1/5))),
+#'   radius = 0.5
+#' )
+#' head(df.ell)
+#' ggplot2::ggplot(df.ell, ggplot2::aes(x, y, group = idx.pnt)) +
+#'   ggplot2::geom_path() + ggplot2::coord_fixed()
+#' # Poincare half-space model for hyperbolic space.
+#' df.ell <- with(spaceHyperbolic(d = 2, model = 'half'), {
+#'   getMetricEllipsoid(genGrid(3) + 0.5, metric, radius = 0.1)
+#' })
+#' head(df.ell)
+#' ggplot2::ggplot(df.ell, ggplot2::aes(x, y, group = idx.pnt)) +
+#'   ggplot2::geom_path() + ggplot2::coord_fixed()
+getMetricEllipsoid <- function(coord, metric, radius, ...){
+  # create data.frame of ellipsoid for plotting, currently 2-dim only
+  # this function gives you ellipses of equal geodesic distance to the coord
+
+  # stopifnot(is.matrix(coord))
+
+  if( !is.data.frame(coord) & !is.matrix(coord) & !is.list(metric) ) {
+    coord <- matrix(coord, nrow = 1)
+    if(inherits(metric, 'function'))
+      metric <- list(metric(coord[1, ]))
+    else
+      metric <- list(metric)
+  }
+  if(inherits(metric, 'function'))
+    metric <- apply(coord, 1, metric, simplify = F)
+  stopifnot(nrow(coord) == length(metric))
+  stopifnot(is.list(metric))
+  stopifnot(all(sapply(metric, dim) == ncol(coord)))
+
+  if(ncol(coord) != 2) stop('currently only supports d = 2.')
+
+  # browser();QWER
+  f.call <- match.call()
+  input.args <- as.list(f.call)[-1]
+  if(is.null(input.args$radius)) input.args$radius <- 1
+
+  not.my.args <- input.args[setdiff(names(input.args), c('coord', 'metric'))]
+
+  ls.ell <- base::mapply(function(center, mat) {
+    # mat <- mat / sum(mat ^ 2) # unify size first
+    # mat <- mat
+    ls.args <- c(list(
+      center = as.numeric(center), shape = MASS::ginv(mat), draw = F
+    ), not.my.args)
+    tm <- as.data.frame(do.call(car::ellipse, ls.args))
+    return(tm)
+  }, center = asplit(coord, 1), mat = metric, SIMPLIFY = F)
+
+  names(ls.ell) <- seq_along(ls.ell)
+  df.ell <- purrr::map_df(ls.ell, ~ .x, .id = 'idx.pnt')
+  if(!is.null(colnames(coord))) names(df.ell) <- c('idx.pnt', colnames(coord))
+  df.ell$idx.pnt <- as.integer(df.ell$idx.pnt)
+
+  return(df.ell)
 }
 
 #' plot graph (edges) on coordinates

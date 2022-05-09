@@ -1,6 +1,6 @@
 Package: remeloc
 Type: Package
-Title: What the Package Does (Title Case)
+Title: Riemannian Metrice Estimation with Local Regression
 Version: 0.1.0
 Author: Who wrote it
 Maintainer: The package maintainer <yourself@somewhere.net>
