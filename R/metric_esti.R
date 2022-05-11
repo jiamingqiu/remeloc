@@ -9,8 +9,8 @@ idx_glm_optns <- function(optns){
   # return index of options list that is passed to glm.fit
   # by dropping what our method uses.
   res <- which(!(names(optns) %in% c(
-    'n.local', 'method.trim', 'metric.only',
-    'local.reach', 'intercept', 'type'
+    'n.local', 'method.trim', 'tensor.only',
+    'local.reach', 'intercept', 'type', 'curvature'
   )))
   return(res)
 }
@@ -25,6 +25,10 @@ idx_glm_optns <- function(optns){
 #'
 #' @details Possible options are
 #' \describe{
+#'    \item{\code{curvature}}{
+#'        \code{FALSE}(default)/\code{TRUE}, whether to include Riemann (0,4)-
+#'        curvature in the local regression.
+#'    }
 #'    \item{\code{method.trim}}{
 #'        \code{"proximity"}(default)/\code{"random"}, method to select local
 #'        responses, either random, or by proximity to target points. Here
@@ -36,10 +40,11 @@ idx_glm_optns <- function(optns){
 #'        \code{c(10, 1000)}. If provided only one value, will use as max, and
 #'        min will be set to 1.
 #'    }
-#'    \item{\code{metric.only}}{
+#'    \item{\code{tensor.only}}{
 #'        \code{TRUE}(default)/\code{FALSE}, whether to return only the
-#'        estimated local metric tensor per target point, or to also include
-#'        additional results, such as local observations, fits, and options.
+#'        estimated local metric tensor (and curvature if requested) per target
+#'        point, or to also include additional results, such as local
+#'        observations, fits, and options.
 #'    }
 #' }
 #'
@@ -59,6 +64,10 @@ set_optns <- function(optns = list(), ...){
   optns[names(ls.args)] <- ls.args
 
   ## fill in the defaults
+  # Riemann curvature?
+  if(is.null(optns$curvature)) optns$curvature <- FALSE
+  stopifnot(inherits(optns$curvature, 'logical'))
+
   # if locally more data available how to trim down the size
   optns$method.trim <- match.arg(optns$method.trim, c(
     'proximity', 'random'
@@ -70,8 +79,8 @@ set_optns <- function(optns = list(), ...){
   if(length(optns$n.local) == 1) optns$n.local <- c(1, optns$n.local)
 
   # what to return after estimation
-  if(is.null(optns$metric.only)) optns$metric.only <- TRUE
-  stopifnot(inherits(optns$metric.only, 'logical'))
+  if(is.null(optns$tensor.only)) optns$tensor.only <- TRUE
+  stopifnot(inherits(optns$tensor.only, 'logical'))
 
   return(optns)
 
@@ -475,6 +484,39 @@ fitMetric <- function(formula, data, coord, optns = list()){
   # }
   # optns$method.trim <- match.arg(optns$method.trim, c("proximity", "random"))
 
+  # browser();QWER
+
+  colnames(resp) <- c('resp', outer(
+    seq(2), seq(ncol(resp) %/% 2),
+    function(x, y) sprintf('p%se%s', x, y)
+  ))
+
+  ls.coord.diff <- lapply(seq(ncol(resp) %/% 2), function(idx.edge.set) {
+    # browser();QWER
+    # the ith pair
+    mat.edge <- resp[, 1 + seq(2) + 2 * (idx.edge.set - 1)]
+    if(length(unique(mat.edge[, 1])) > length(unique(mat.edge[, 2]))){
+      # switch index columns to put the least varying first
+      mat.edge <- mat.edge[, c(2, 1)]
+    }
+    tm <- list(
+      mat.edge,
+      deltaCoord(obsv.coord, mat.edge, return.format = 'keep')
+    )
+    tm <- do.call(cbind, tm) # this is fast enough
+    tm <- as.data.frame(tm)
+    names(tm) <- c(
+      sprintf('p%se%s', seq(2), idx.edge.set),
+      sprintf('cd%se%s', seq(d), idx.edge.set)
+    )
+    return(tm)
+  })
+  df.graph <- do.call(cbind, ls.coord.diff)
+  df.graph$resp <- resp[, 'resp']
+  df.graph$idx.resp <- seq(nrow(df.graph))
+
+  ### Not really saving time, the second step slicing within each element
+  ### is slower!
   ### reformat for faster slicing later
   # for faster slicing later, we translate df.resp into list, for the record,
   # slicing list is 10 times faster than slicing data.frame, and slicing list
@@ -483,43 +525,38 @@ fitMetric <- function(formula, data, coord, optns = list()){
   # local nbhd when estimating locally, especially local.reach is large creating
   # overlaps, and when comparing multiple pairs.
 
-  df.resp <- data.frame(resp)
-  names(df.resp) <- c('resp', outer(
-    seq(2), seq(ncol(df.resp) %/% 2),
-    function(x, y) sprintf('p%se%s', x, y)
-  ))
-  df.resp$idx.dist <- seq(nrow(df.resp))
-  # next: to list, essentially a faster slicing index by split into list
-  # this template of list is used for faster slicing later
-  template.ls <- rep(list(NULL), nrow(obsv.coord))
-  names(template.ls) <- seq_along(template.ls)
-
-  ls.graph <- lapply(seq(ncol(resp) %/% 2), function(idx.edge.set) {
-    # browser();QWER
-    mat.edge <- as.matrix(df.resp[, 1 + seq(2) + 2 * (idx.edge.set - 1)])
-    if(length(unique(mat.edge[, 1])) > length(unique(mat.edge[, 2]))){
-      # switch index columns to put the least varying first
-      mat.edge <- mat.edge[, c(2, 1)]
-    }
-    tm <- list(
-      mat.edge, df.resp$idx.dist, df.resp$resp,
-      deltaCoord(obsv.coord, mat.edge, return.format = 'keep')
-    )
-    tm <- do.call(cbind, tm) # this is fast enough
-    colnames(tm) <- c(
-      'p1', 'p2', 'idx.dist', 'resp', sprintf('coordd.%s', seq(d))
-    )
-
-    # split into list
-    tm <- split.data.frame(tm, tm[, 'p1'])
-    res <- template.ls
-    res[names(tm)] <- tm
-    return(res)
-  })
+  # # next: to list, essentially a faster slicing index by split into list
+  # # this template of list is used for faster slicing later
+  # template.ls <- rep(list(NULL), nrow(obsv.coord))
+  # names(template.ls) <- seq_along(template.ls)
+  #
+  # ls.graph <- lapply(seq(ncol(resp) %/% 2), function(idx.edge.set) {
+  #   # browser();QWER
+  #   mat.edge <- as.matrix(df.resp[, 1 + seq(2) + 2 * (idx.edge.set - 1)])
+  #   if(length(unique(mat.edge[, 1])) > length(unique(mat.edge[, 2]))){
+  #     # switch index columns to put the least varying first
+  #     mat.edge <- mat.edge[, c(2, 1)]
+  #   }
+  #   tm <- list(
+  #     mat.edge, df.resp$idx.dist, df.resp$resp,
+  #     deltaCoord(obsv.coord, mat.edge, return.format = 'keep')
+  #   )
+  #   tm <- do.call(cbind, tm) # this is fast enough
+  #   colnames(tm) <- c(
+  #     'p1', 'p2', 'idx.dist', 'resp', sprintf('coordd.%s', seq(d))
+  #   )
+  #
+  #   # split into list
+  #   tm <- split.data.frame(tm, tm[, 'p1'])
+  #   res <- template.ls
+  #   res[names(tm)] <- tm
+  #   return(res)
+  # })
 
   res <- list(
-    graph = ls.graph, coord = obsv.coord,
-    resp = df.resp, formula = formula, optns = optns
+    graph = tibble::as_tibble(df.graph), coord = obsv.coord,
+    # resp = df.resp,
+    formula = formula, optns = optns
   )
   class(res) <- c('metricModel', class(res))
 
@@ -558,7 +595,7 @@ fitMetric <- function(formula, data, coord, optns = list()){
 #'    comparing edges cases) the response for comparing edge 5-6 and edge 6-8 is
 #'    1.
 #'    \cr
-#'    If requested by setting \code{optns$metric.only} as \code{FALSE}, the
+#'    If requested by setting \code{optns$tensor.only} as \code{FALSE}, the
 #'    returned value have an additional elements for local observations (edges),
 #'    which is also a named list named after row indices of \code{target}, whose
 #'    elements are matrices with columns corresponding to indices of edges
@@ -689,10 +726,10 @@ estiMetric <- function(target, model, resp, obsv.coord, optns = list()){
   #   optns$n.local <- c(1, optns$n.local)
   # }
   # stopifnot(all(optns$n.local >= 1))
-  # if(is.null(optns$metric.only))
-  #   optns$metric.only <- TRUE
+  # if(is.null(optns$tensor.only))
+  #   optns$tensor.only <- TRUE
   # stopifnot(
-  #   length(optns$metric.only) == 1 & inherits(optns$metric.only, 'logical')
+  #   length(optns$tensor.only) == 1 & inherits(optns$tensor.only, 'logical')
   # )
   # if(is.null(optns$locMetric)){
   #   tm <- list()
@@ -714,42 +751,9 @@ estiMetric <- function(target, model, resp, obsv.coord, optns = list()){
   max.n.local <- max(optns$n.local)
   min.n.local <- min(optns$n.local)
 
-  # df.resp <- data.frame(resp)
-  # names(df.resp) <- c('resp', outer(
-  #   seq(2), seq(ncol(df.resp) %/% 2),
-  #   function(x, y) sprintf('p%se%s', x, y)
-  # ))
-  # df.resp$idx.dist <- seq(nrow(df.resp))
-  # # next: to list, essentially a faster slicing index by split into list
-  # # this template of list is used for faster slicing later
-  # template.ls <- rep(list(NULL), nrow(obsv.coord))
-  # names(template.ls) <- seq_along(template.ls)
-  #
-  # ls.graph <- lapply(seq(ncol(resp) %/% 2), function(idx.edge.set) {
-  #   # browser();QWER
-  #   mat.edge <- as.matrix(df.resp[, 1 + seq(2) + 2 * (idx.edge.set - 1)])
-  #   if(length(unique(mat.edge[, 1]))> length(unique(mat.edge[, 2]))){
-  #     # switch index columns to put the least varying first
-  #     mat.edge <- mat.edge[, c(2, 1)]
-  #   }
-  #   tm <- list(
-  #     mat.edge, df.resp$idx.dist, df.resp$resp,
-  #     deltaCoord(obsv.coord, mat.edge, return.format = 'keep')
-  #   )
-  #   tm <- do.call(cbind, tm) # this is fast enough
-  #   colnames(tm) <- c(
-  #     'p1', 'p2', 'idx.dist', 'resp', sprintf('coordd.%s', seq(d))
-  #   )
-  #
-  #   # split into list
-  #   tm <- split.data.frame(tm, tm[, 'p1'])
-  #   res <- template.ls
-  #   res[names(tm)] <- tm
-  #   return(res)
-  # })
-  # # object.size(ls.graph) / 1024 ^ 2
+  # browser();QWER
 
-  ls.graph <- model$graph
+  df.graph <- model$graph
   obsv.coord <- model$coord
 
   ### use diff in coord to determine local nbhd of target points
@@ -781,36 +785,45 @@ estiMetric <- function(target, model, resp, obsv.coord, optns = list()){
   loc.obsv <- lapply(target.nbhd, function(nbhd){
     # browser();QWER
 
-    loc.graph <- lapply(ls.graph, function(x) x[as.numeric(nbhd)])
-    loc.graph <- lapply(loc.graph, function(x) {
-      # browser();QWER
-      res <- x[!sapply(x, is.null)]
-      res <- lapply(res, function(mat) mat[mat[, 'p2'] %in% nbhd, , drop = F])
-      res <- do.call(rbind, res)
-      return(res)
-    })
-    if(length(loc.graph) == 2){
-      # if comparing edges, there will be 2 lists, need to intersect
-      idx.yes <- base::intersect(
-        loc.graph[[1]][, 'idx.dist'], loc.graph[[2]][, 'idx.dist']
-      )
-      loc.graph <- lapply(loc.graph, function(mat){
-        res <- mat[mat[, 'idx.dist'] %in% idx.yes, , drop = F]
-        res <- res[order(res[, 'idx.dist']), , drop = F]
-        res
-      })
-      return(loc.graph)
-    }else{
-      return(loc.graph[[1]])
+    loc.graph <- df.graph
+    nm.edge.idx <- stringr::str_subset(names(df.graph), 'p\\d+e\\d+')
+    for(nm in nm.edge.idx){
+      loc.graph <- loc.graph[loc.graph[[nm]] %in% nbhd, , drop = F]
     }
+
+    return(loc.graph)
+
+    # loc.graph <- lapply(ls.graph, function(x) x[as.numeric(nbhd)])
+    # loc.graph <- lapply(loc.graph, function(x) {
+    #   # browser();QWER
+    #   res <- x[!sapply(x, is.null)]
+    #   res <- lapply(res, function(mat) mat[mat[, 'p2'] %in% nbhd, , drop = F])
+    #   res <- do.call(rbind, res)
+    #   return(res)
+    # })
+    # if(length(loc.graph) == 2){
+    #   # if comparing edges, there will be 2 lists, need to intersect
+    #   idx.yes <- base::intersect(
+    #     loc.graph[[1]][, 'idx.dist'], loc.graph[[2]][, 'idx.dist']
+    #   )
+    #   loc.graph <- lapply(loc.graph, function(mat){
+    #     res <- mat[mat[, 'idx.dist'] %in% idx.yes, , drop = F]
+    #     res <- res[order(res[, 'idx.dist']), , drop = F]
+    #     res
+    #   })
+    #   return(loc.graph)
+    # }else{
+    #   return(loc.graph[[1]])
+    # }
 
   })
 
   # check if densely sampled near targets
-  if(length(ls.graph) == 2)
-    n.loc.obsv <- sapply(loc.obsv, function(x) nrow(x[[1]]))
-  else
-    n.loc.obsv <- sapply(loc.obsv, nrow)
+  n.loc.obsv <- unlist(sapply(loc.obsv, nrow))
+  # if(length(ls.graph) == 2)
+  #   n.loc.obsv <- sapply(loc.obsv, function(x) nrow(x[[1]]))
+  # else
+  #   n.loc.obsv <- unlist(sapply(loc.obsv, nrow))
   if(!all(n.loc.obsv >= min.n.local)) {
     warning(sprintf(
       'samples are not dense enough near %s target points.',
@@ -819,31 +832,81 @@ estiMetric <- function(target, model, resp, obsv.coord, optns = list()){
   }
 
   # estimating for each targeted points
-  res.locMetric <- lapply(loc.obsv, function(input){
-    if(is.list(input)){
-      # if comparing
-      ls.args <- list(
-        y = input[[1]][, 'resp'],
-        coord.diff = lapply(input, function(x) x[, -seq(4), drop = F])
-      )
-    }else{
-      ls.args <- list(
-        y = input[, 'resp'],
-        coord.diff = input[, -seq(4), drop = F]
-      )
-    }
-    ls.args$optns <- optns
-    return(do.call(locMetric, ls.args))
-  })
+  if(!optns$curvature){
 
-  # return list of local results: estimated metric tensor only or not
-  if(optns$metric.only)
-    return(lapply(res.locMetric, `[[`, 'mat.g'))
+    # if not including curvature term
 
+    res.locMetric <- lapply(loc.obsv, function(input){
+      ls.args <- list(y = input[['resp']], optns = optns)
+      if(optns$type == 'compare'){
+        # if comparing
+        ls.args$coord.diff <- lapply(seq(2), function(which.edge){
+          as.matrix(
+            input[, sprintf('cd%se%s', seq(d), which.edge), drop = F]
+          )
+        })
+      }else{
+        ls.args$coord.diff <-
+          as.matrix(input[, sprintf('cd%se1', seq(d)), drop = F])
+      }
+      return(do.call(locMetric, ls.args))
+    })
+
+  }else{
+
+    # taking curvature into consideration
+    res.locMetric <- mapply(function(obsv, tgt){
+      ls.args <- list(y = obsv[['resp']], optns = optns)
+
+      if(optns$type == 'compare'){
+        # if comparing
+
+        ls.args$coord.diff <- lapply(seq(2), function(which.edge){
+          as.matrix(
+            obsv[, sprintf('cd%se%s', seq(d), which.edge), drop = F]
+          )
+        })
+
+        ls.args$coord.diff.target <- lapply(seq(2), function(which.edge){
+          lapply(sprintf('p%se%s', seq(2), which.edge), function(idx.col){
+            tm <- obsv.coord[obsv[[idx.col]], , drop = F]
+            return(tm - as.numeric(tgt[col(tm)]))
+          })
+        })
+
+      }else{
+        ls.args$coord.diff <-
+          as.matrix(obsv[, sprintf('cd%se1', seq(d)), drop = F])
+        ls.args$coord.diff.target <-
+          lapply(c('p1e1', 'p2e1'), function(idx.col){
+            tm <- obsv.coord[obsv[[idx.col]], , drop = F]
+            return(tm - as.numeric(tgt[col(tm)]))
+          })
+      }
+
+      return(do.call(locRiemCvt, ls.args))
+
+    }, obsv = loc.obsv, tgt = asplit(target, 1), SIMPLIFY = F)
+
+  }
+
+  # return list of local results: estimated tensor only or not
   loc.res <- list(
-    metric = lapply(res.locMetric, `[[`, 'mat.g'),
-    obsv = loc.obsv, optns = optns
+    metric = lapply(res.locMetric, `[[`, 'mat.g')
   )
+  if(optns$curvature)
+    loc.res$curvature <- lapply(res.locMetric, `[[`, 'arr.cvt')
+  if(optns$intercept)
+    loc.res$intercept <- lapply(res.locMetric, `[[`, 'intercept')
+
+  if(!optns$tensor.only){
+    loc.res$obsv <- loc.obsv
+    loc.res$optns <- optns
+  }
+
+  if(length(loc.res) == 1) # if only metric tensor is requested
+    loc.res <- loc.res$metric
+
   return(loc.res)
 
 }
@@ -964,7 +1027,7 @@ estiMetric <- function(target, model, resp, obsv.coord, optns = list()){
 #' # the fitted intercept should be close to 0
 #' res.itcpt$loc.fit$coefficients[1]
 locMetric <- function(y, coord.diff, optns = list()){
-  # local polynomial estimating metric tensor.
+  # local regression estimating metric tensor.
   # browser()
 
   # optns
@@ -1020,7 +1083,10 @@ locMetric <- function(y, coord.diff, optns = list()){
     loc.fit <- NULL
   }
   if(optns$intercept == TRUE){
+    itcpt <- vec.g[1]
     vec.g <- vec.g[-1] # remove fitted intercept from estimated metric
+  }else{
+    itcpt <- NULL
   }
   # # translate to metric tensor
   # mat.g <- matrix(0, coord.d, coord.d)
@@ -1031,7 +1097,157 @@ locMetric <- function(y, coord.diff, optns = list()){
   mat.g <- vec2SymMat(vec.g)
 
   return(list(
-    mat.g = mat.g,
+    mat.g = mat.g, intercept = itcpt,
+    mat.design = mat.v,
+    loc.fit = loc.fit
+    , optns = optns
+  ))
+}
+
+locRiemCvt <- function(y, coord.diff, coord.diff.target, optns = list()){
+
+  # local regression estimating metric and Riemann curvature
+  # browser();QWER
+
+  # optns
+  if(is.null(optns$type)){
+    optns$type <- "distance"
+  }
+  optns$type <- match.arg(optns$type, c("distance", "thresholding", "compare"))
+  if(is.null(optns$family) & optns$type != "distance"){
+    # if family not specified for thresholding and compare type
+    optns$family <- stats::binomial(link = "logit")
+  }
+
+  if(is.null(optns$intercept)){
+    optns$intercept <- base::ifelse(
+      optns$type == "thresholding", TRUE, FALSE
+    )
+  }
+  # idx of arguments not pass to glm.fit
+  # idx.optns.notglm <- which(names(optns) %in% c('intercept', 'type'))
+  idx.optns.glm <- idx_glm_optns(optns)
+
+  # sanity and design matrix
+  if(optns$type != "compare"){
+
+    stopifnot(is.matrix(coord.diff))
+    stopifnot(length(y) == nrow(coord.diff))
+    stopifnot(is.list(coord.diff.target) & length(coord.diff.target) == 2)
+    stopifnot(all(length(y) == sapply(coord.diff.target, nrow)))
+    stopifnot(all(ncol(coord.diff) == sapply(coord.diff.target, ncol)))
+
+    coord.d <- ncol(coord.diff)
+    # index for vectorizing curvature tensor action
+    df.cvt.idx <- vecRiemCvtIdx(coord.d, drop.zero = T)
+    # basis for the vectorization
+    vec.cvt.basis <- as.matrix(
+      df.cvt.idx[, stringr::str_detect(names(df.cvt.idx), 'e\\d+'), drop = F]
+    )
+
+    # design matrix for metric tensor
+    mat.v <- vecQuad(coord.diff)
+
+    # # design matrix for (0,4)-curvature
+    # arr.r <- with(df.cvt.idx, {
+    #   coord.diff.target[[1]][, i1] * coord.diff.target[[2]][, i2] *
+    #     coord.diff.target[[2]][, i3] * coord.diff.target[[1]][, i4]
+    # }) # arr.r[, j] = term in df.cvt.idx[j, ]
+    # # apply(arr.r, 2, sd) %>% log10
+    # # put the coef for basis into columns
+    # mat.r <- -1 / 3 * apply(vec.cvt.basis, 2, function(x) {
+    #   rowSums(arr.r * x[col(arr.r)])
+    # })
+    # apply(mat.r, 2, sd) %>% log10
+
+    mat.r <- modelMatRiemCvt(
+      df.cvt.idx, coord.diff.target[[1]], coord.diff.target[[2]],
+      coord.diff.target[[2]], coord.diff.target[[1]]
+    )
+
+    # full design matrix
+    mat.v <- cbind(mat.v, mat.r)
+    # apply(mat.v, 2, sd) %>% log10
+
+  }else{
+
+    stopifnot(is.list(coord.diff))
+    stopifnot(length(coord.diff) == 2)
+    stopifnot(is.matrix(coord.diff[[1]]) & is.matrix(coord.diff[[2]]))
+    stopifnot(all(dim(coord.diff[[1]]) == dim(coord.diff[[2]])))
+    stopifnot(length(y) == nrow(coord.diff[[1]]))
+
+    stopifnot(is.list(coord.diff.target) & length(coord.diff.target) == 2)
+    stopifnot(all(sapply(coord.diff.target, length) == 2))
+    stopifnot(length(unlist(coord.diff.target, recursive = F)) == 4)
+    stopifnot(all(
+      length(y) == sapply(unlist(coord.diff.target, recursive = F), nrow)
+    ))
+    stopifnot(all(
+      ncol(coord.diff) == sapply(unlist(coord.diff.target, recursive = F), nrow)
+    ))
+
+    coord.d <- ncol(coord.diff[[1]])
+    # index for vectorizing curvature tensor action
+    df.cvt.idx <- vecRiemCvtIdx(coord.d, drop.zero = T)
+    # basis for the vectorization
+    vec.cvt.basis <- as.matrix(
+      df.cvt.idx[, stringr::str_detect(names(df.cvt.idx), 'e\\d+'), drop = F]
+    )
+
+    # design matrix for metric tensor
+    mat.v <- vecQuad(coord.diff[[1]]) - vecQuad(coord.diff[[2]])
+
+    # design matrix for curvature
+    mat.r <- modelMatRiemCvt(
+      df.cvt.idx, coord.diff.target[[1]][[1]], coord.diff.target[[1]][[2]],
+      coord.diff.target[[1]][[2]], coord.diff.target[[1]][[1]]
+    ) - modelMatRiemCvt(
+      df.cvt.idx, coord.diff.target[[2]][[1]], coord.diff.target[[2]][[2]],
+      coord.diff.target[[2]][[2]], coord.diff.target[[2]][[1]]
+    )
+
+    # full design matrix
+    mat.v <- cbind(mat.v, mat.r)
+
+  }
+
+  if(optns$intercept == TRUE){
+    mat.v <- cbind(rep(1, nrow(mat.v)), mat.v) # add intercept if asked to
+  }
+
+  if(!is.null(optns$family)){# if using glm.fit with general family
+    loc.fit <- do.call(stats::glm.fit, c(
+      list(x = mat.v, y = y),
+      optns[idx.optns.glm]
+    ))
+    vec.par <- loc.fit$coefficients
+  }else{
+    # vec.par <- solve(crossprod(mat.v)) %*% colSums(mat.v * y)
+    vec.par <- qr.solve(crossprod(mat.v), colSums(mat.v * y))
+    # loc.fit <- lm(y~ 0 + ., data.frame(y, mat.v))
+    # vec.par <- loc.fit$coefficients
+    loc.fit <- NULL
+  }
+  if(optns$intercept == TRUE){
+    itcpt <- vec.par[1]
+    vec.par <- vec.par[-1] # remove fitted intercept from estimated metric
+  }else{
+    itcpt <- NULL
+  }
+  # # translate to metric and curvature tensor
+  vec.g <- vec.par[seq(3)]
+  vec.cvt <- vec.par[-seq(3)]
+
+  mat.g <- vec2SymMat(vec.g)
+  arr.cvt <- array(0, dim = rep(coord.d, 4))
+  arr.cvt[df.cvt.idx$idx] <- rowSums(
+    vec.cvt.basis * vec.cvt[col(vec.cvt.basis)]
+  )
+  # arr.cvt[1,2,2,1]
+
+  return(list(
+    mat.g = mat.g, arr.cvt = arr.cvt, intercept = itcpt,
     mat.design = mat.v,
     loc.fit = loc.fit
     , optns = optns

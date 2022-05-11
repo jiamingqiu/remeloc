@@ -1,5 +1,43 @@
 # utilities
 
+#' Reindex array
+#'
+#' @description Rearrange array so that \code{x_out[to] == x_in[from]}.
+#' Just a wrapper around \code{aperm} for easier use.
+#'
+#' @param x an array
+#' @param to new subscripts
+#' @param from old subscripts
+#'
+#' @return permuted \code{x}
+#' @export
+#'
+#' @examples
+#' reindex(matrix(seq(4), 2, 2), 'ij', 'ji')
+#' tst.arr <- array(seq(16), rep(2, 4))
+#' reindex(tst.arr, 'ijkl', 'jilk')
+#' for(i in seq(2)){ for(j in seq(2)){
+#'   for(k in seq(2)){ for(l in seq(2)){
+#'     stopifnot(identical(
+#'       reindex(tst.arr, 'ijkl', 'jilk')[i, j, k, l],
+#'       tst.arr[j, i, l, k]
+#'     ))
+#' }}}}
+reindex <- function(x, to, from){
+
+  # a wrapper around aperm for easier use
+  dim.x <- dim(x)
+  idx.new <- strsplit(to, '')[[1]]
+  idx.old <- strsplit(from, '')[[1]]
+  stopifnot(length(idx.new) == length(dim.x) & length(idx.old) == length(dim.x))
+  stopifnot(identical(sort(idx.new), sort(idx.old)))
+
+  perm <- match(idx.new, idx.old)
+
+  return(aperm(x, perm))
+
+}
+
 #' Index points
 #' @description create a look-up dictionary for input points, predominantly used
 #' to simplify data structure of graphs.

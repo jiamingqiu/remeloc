@@ -4,7 +4,7 @@ test_that('options and model guessing', {
 
   expect_setequal(
     names(guess_model()), c(
-      'method.trim', 'n.local', 'metric.only', 'type', 'intercept'
+      'method.trim', 'n.local', 'tensor.only', 'type', 'intercept', 'curvature'
     )
   )
   expect_identical(set_optns(method.trim = 'random')$method.trim, 'random')
@@ -110,7 +110,7 @@ test_that('fitMetric and estiMetric', {
     , type = 'thre', intercept = TRUE
   ))
   true.metric.binary <- lapply(true.metric, function(x) 20 * x)
-  esti.metric <- estiMetric(target, fit.binary)
+  esti.metric <- estiMetric(target, fit.binary)$metric
   names(esti.metric) <- NULL
   # check symmetric and positive definite
   expect_true(all(sapply(esti.metric, isSymmetric)))

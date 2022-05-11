@@ -15,5 +15,5 @@ Suggests:
 Config/testthat/edition: 3
 LinkingTo: Rcpp
 Imports: 
-    Rcpp, nloptr, deSolve, stringr
+    Rcpp, nloptr, deSolve, stringr, tibble
 VignetteBuilder: knitr

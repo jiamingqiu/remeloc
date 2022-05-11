@@ -594,7 +594,6 @@ getChristoffel <- function(metric, d) {
     # compute arr.diff[i, j, l] =
     #     \partial_i g_{jl} + \partial_j g_{il} - \partial_l g_{ij}
     arr.diff <-
-      # aperm(arr.jacob, c(3, 2, 1)) + aperm(arr.jacob, c(2, 3, 1)) - arr.jacob
       aperm(arr.jacob, c(3, 1, 2)) + aperm(arr.jacob, c(1, 3, 2)) - arr.jacob
 
     # augment to arr.diff[i, j, k, l] = arr.diff[i, j, l] for all k = 1, ..., d
@@ -604,7 +603,7 @@ getChristoffel <- function(metric, d) {
     # apply(aug.diff, 3, function(tm) identical(arr.diff, tm)) %>%
     #   all %>% stopifnot
 
-    # augment inverse metric matrix to aug.inv.met[i, j, k, l] = inv.metric[k, l]
+    # augment inverse metric matrix to aug.inv.met[i, j, k, l]=inv.metric[k, l]
     aug.inv.met <- array(inv.metric, dim = rep(d, 4))
     aug.inv.met <- aperm(aug.inv.met, c(3, 4, 1, 2))
     # # check correctness
@@ -659,13 +658,15 @@ get04Curvature <- function(metric, d) {
     # aug.cvt.13[i,j,k,l,m] = cvt.13[i,j,k,l]
     aug.cvt.13 <- array(cvt.13, rep(d, 5))
     # permute aug.cvt.13[i,j,k,l,m] <- aug.cvt.13[i,j,k,m,l] = cvt.13[i,j,k,m]
-    aug.cvt.13 <- aperm(aug.cvt.13, c(1, 2, 3, 5, 4))
+    # aug.cvt.13 <- aperm(aug.cvt.13, c(1, 2, 3, 5, 4))
+    aug.cvt.13 <- reindex(aug.cvt.13, to = 'ijklm', from = 'ijkml')
 
     # aug.met[i,j,k,l,m] = metric[i,j]
     aug.met <- array(metric(x), rep(d, 5))
     # reshape2::melt(aug.met)
     # permute, aug.met[i,j,k,l,m] <- aug.met[l,m,i,j,k] = metric[l,m]
-    aug.met <- aperm(aug.met, perm = c(3, 4, 5, 1, 2))
+    # aug.met <- aperm(aug.met, perm = c(3, 4, 5, 1, 2))
+    aug.met <- reindex(aug.met, to = 'ijklm', from = 'lmijk')
     # aug.met[,,,1,1] #?????
     # reshape2::melt(aug.met)
     # tst <- array(seq(32), rep(2, 5));
@@ -714,22 +715,26 @@ get13Curvature <- function(metric, d){
     # into array, hence partial.christ[i, j, k, l] = \partial_l Christ[i, j, k]
     partial.christ <- array(partial.christ, dim = rep(d, 4))
     # rearrange into [i, j, k, l] = \partial_i Christoffel[j, k, l]
-    partial.christ <- aperm(partial.christ, c(4, 1, 2, 3))
+    # partial.christ <- aperm(partial.christ, c(4, 1, 2, 3))
+    partial.christ <- reindex(partial.christ, to = 'ijkl', from = 'jkli')
 
     # now the difference of
     #..\partial_i Christ[j, k, l] - \partial_j Christ[i, k, l]
     arr.diff <- partial.christ -
       # after_permute[i,j,k,l]=partial.christ[j,i,k,l]
-      aperm(partial.christ, c(2, 1, 3, 4))
+      # aperm(partial.christ, c(2, 1, 3, 4))
+      reindex(partial.christ, to = 'ijkl', from = 'jikl')
 
     # augment christ [i, j, k, l, m] = Christ[i, j, k]
     aug.christ <- array(christ(x), rep(d, 5))
     # product term [i, j, k, l, m] = Christ[j, k, m] * Christ[i, m, l]
     arr.prod <-
       # after_permute[i,j,k,l,m]=aug.christ[j,k,m,i,l]=Christ[j,k,m]
-      aperm(aug.christ, c(2, 3, 5, 1, 4)) *
+      # aperm(aug.christ, c(2, 3, 5, 1, 4)) *
+      reindex(aug.christ, to = 'ijklm', from = 'jkmil') *
       # after_permute[i,j,k,l,m]=aug.christ[i,m,l,j,k]=Christ[i,m,l]
-      aperm(aug.christ, c(1, 5, 4, 2, 3))
+      # aperm(aug.christ, c(1, 5, 4, 2, 3))
+      reindex(aug.christ, to = 'ijklm', from = 'imljk')
     # sum over m, so
     #..arr.prod[i, j, k, l] = sum_m ( Christ[j, k, m] * Christ[i, m, l] )
     arr.prod <- rowSums(arr.prod, dims = 4)
@@ -737,7 +742,8 @@ get13Curvature <- function(metric, d){
     # the (1,3)-curvature tensor
     res.arr <- arr.diff + arr.prod -
       # after_permute[i,j,k,l]=arr.prod[j,i,k,l]
-      aperm(arr.prod, c(2, 1, 3, 4))
+      reindex(arr.prod, to = 'ijkl', from = 'jikl')
+      # aperm(arr.prod, c(2, 1, 3, 4))
 
     return(res.arr)
 
@@ -749,120 +755,201 @@ get13Curvature <- function(metric, d){
 
 ##### vectorization of Riemann curvature tensor ################################
 
-vecRCIdx <- function(d) {
-  # generate index of d-dim Riemann (0,4)-Curvature tensor following symmetric
+# getTensorAction <- function(tensor){
+#   # vectorize x for later action from Riemann curvature (0,4)-tensor
+#   # TBD
+#   res.f <- function(...){
+#     as.name(match.call())
+#   }
+# }
+
+modelMatRiemCvt <- function(df.idx, x, y, z, w){
+
+  # construct design matrix for local regression on Riemann (0,4)-curvature
+  # df.idx: result from vecRiemCvtIdx
+  # ...: 4 tensor arrays, no sanity check, make sure dimension match!
+
+  # ls.args <- as.list(match.call())
+  # ls.args <- ls.args[-1]
+  # ls.args <- ls.args[!(names(ls.args) %in% 'df.idx')]
+  # stopifnot(length(ls.args) == 4)
+
+  arr.r <- with(df.idx, {
+    x[, i1] * y[, i2] * z[, i3] * w[, i4]
+    # ls.args[[1]][, i1] * ls.args[[2]][, i2] *
+    #   ls.args[[3]][, i3] * ls.args[[1]][[4]][, i4]
+  }) # arr.r[, j] = term in df.idx[j, ]
+  # apply(arr.r, 2, sd) %>% log10
+  vec.cvt.basis <- as.matrix(
+    df.idx[, stringr::str_detect(names(df.idx), 'e\\d+'), drop = F]
+  )
+  # put the coef for basis into columns
+  mat.r <- -1 / 3 * apply(vec.cvt.basis, 2, function(x) {
+    rowSums(arr.r * x[col(arr.r)])
+  })
+
+  return(mat.r)
+
 }
 
-vecTensorIdx <- function(d) {
+#' Index table for vectorizing algebraic curvature tensor
+#'
+#' @param d dimension of vector space
+#'
+#' @return a data frame
+#' @export
+#'
+#' @details See \link{\code{vecTensorIdx}} for details. See p212, Lee (2018)
+#' for definition.
+#'
+#' @examples
+#' d <- 3
+#' manifold <- spaceHyperbolic(d, model = 'half')
+#' cvt04.f <- get04Curvature(manifold$metric, d = d)
+#' pnt <- manifold$genPnt(10)
+#' true.cvt <- apply(pnt, 1, cvt04.f) # flatten tensors
+#' df.idx <- vecRiemCvtIdx(d, drop.zero = F)
+#' # coefficients, the basis are orthonormal
+#' mat.basis <- as.matrix(
+#'   df.idx[, stringr::str_detect(names(df.idx), 'e\\d+'), drop = F]
+#' )
+#' coef.cvt <- apply(true.cvt, 2, function(x){
+#'   colSums(x * mat.basis)
+#' })
+#' coef.cvt <- matrix(coef.cvt, nrow = ncol(mat.basis))
+#' reconstruct.cvt <- mat.basis %*% coef.cvt
+#' all.equal(reconstruct.cvt, true.cvt)
+#' see.cvt <- cvt04.f(pnt[1, ])
+#' for(idx in seq(nrow(df.idx))){
+#'   stopifnot(all.equal(
+#'     reconstruct.cvt[idx, 1],
+#'     with(
+#'       df.idx[idx, sprintf('i%s', seq(4))],
+#'       see.cvt[i1, i2, i3, i4]
+#'     )
+#'   ))
+#' }
+vecRiemCvtIdx <- function(d, ...) {
+  # generate index of d-dim Riemann (0,4)-Curvature tensor following symmetries
 
-  # generate index for vectorization of tensor
-
-  d <- 2
-  dim <- rep(d, 4)
-  res.dim <- d^2 * ( d^2 - 1 ) / 12
-  sym.eq <- list(
+  sym.eq <- c(
     'ijkl = -jikl' # means T(w, x, y, z) = T(x, w, y, z)
     , 'ijkl = - ijlk'
     , 'ijkl = klij'
     , 'ijkl = -jkil - kijl'
   )
-  if(!is.list(sym.eq)) sym.eq <- list(sym.eq)
+  res.dim <- d^2 * ( d^2 - 1 ) / 12
+  df.subscript <- vecTensorIdx(d = d, k = 4, sym.eq = sym.eq, ...)
+  stopifnot(ncol(df.subscript) == res.dim + 4 + 1 + 1)
 
-  df.idx <- do.call(expand.grid, lapply(dim, seq))
-  names(df.idx) <- sprintf('dim%s', seq(ncol(df.idx)))
-  mat.idx <- as.matrix(df.idx)
-  df.idx$raw.idx <- seq(nrow(df.idx))
-  df.idx$silce <- apply(mat.idx, 1, function(x){
-    sprintf('[%s]', paste(x, collapse = ','))
+  return(df.subscript)
+
+}
+
+#' Index table for vectorizing tensor/multidimensional array w.r.t. symmetries
+#'
+#' @param d dimension of vector space
+#' @param k dimension of indices
+#' @param sym.eq equalities defining symmetries
+#' @param drop.zero whether to drop zeros in return
+#'
+#' @return a data frame
+#' @export
+#'
+#' @details The each row in the returned data frame represents one element in
+#' the desired tensor, and with the following columns:
+#' \describe{
+#'   \item{\code{idx}}{The index of the element if flatten.}
+#'   \item{\code{i1, ..., ik}, and \code{subscript}}{Subscripts.}
+#'   \item{\code{e1, ...}}{Basis used for representing.}
+#' }
+#' See \code{\link{decodeSymEq}} for how to specify symmetries.
+#'
+#' @examples
+#' # the algebraic curvature tensor
+#' vecTensorIdx(2, 4, sym.eq = c(
+#'   'ijkl = -jikl' , 'ijkl = - ijlk',
+#'   'ijkl = klij', 'ijkl = -jkil - kijl'
+#' ))
+vecTensorIdx <- function(d, k, sym.eq, drop.zero = T) {
+
+  # generate index for vectorization of tensor
+
+  # d <- 2
+  # k <- 4
+  # sym.eq <- list(
+  #   'ijkl = -jikl' # means T(w, x, y, z) = T(x, w, y, z)
+  #   , 'ijkl = - ijlk'
+  #   , 'ijkl = klij'
+  #   , 'ijkl = -jkil - kijl'
+  # )
+  # # res.dim <- d^2 * ( d^2 - 1 ) / 12
+
+  stopifnot(d >= 1)
+  stopifnot(k >= 1)
+
+  df.subscript <- expand.grid(rep(list(seq(d)), k))
+  names(df.subscript) <- sprintf('i%s', seq(k))
+  mat.subscript <- as.matrix(df.subscript)
+  df.subscript$subscript <- apply(mat.subscript, 1, function(idx){
+    paste(idx, collapse = ',')
   })
-  # df.idx
 
-  # handling symmetries
-  perm.f <- lapply(sym.eq, decodeSymEq)
-  # arr.assign <- rep('', nrow(df.idx))
-  # arr.assign[1] <- ''
-  # for(idx.rule in seq_along(perm.f)){
-  #   idx.rule <- 3
-  arr.assign <- sapply(perm.f, function(rule){
-    # rule <- perm.f[[idx.rule]]
-    arr.assign <- rep('', nrow(df.idx))
-    # arr.assign[1] <- ''
-    for(i in seq(2, nrow(df.idx))){
-      current.idx <- mat.idx[i, ]
-      involved.idx <- rule(current.idx, full.assign = F, index.only = T)
-      involved.slice <- sapply(involved.idx, function(x){
-        sprintf('[%s]', paste(x, collapse = ','))
+  if(missing(sym.eq)){
+    # if no symmetries, use all elements
+    vec.basis <- diag(nrow(df.subscript))
+  }else{
+    # if(!is.list(sym.eq)) sym.eq <- list(sym.eq)
+
+    # list of decoder according to rules
+    ls.rule <- lapply(sym.eq, decodeSymEq)
+    # constructing linear system per subscript combination accordingly
+    ls.lin.sys <- lapply(ls.rule, function(rule) {
+      apply(mat.subscript, 1, function(x) {
+        rule(as.numeric(x), lin.sys = T)
       })
-      # # if only involving self
-      # if(length(involved.idx) == 1 & all(involved.idx[[1]] == current.idx)){
-      #   arr.assign[i] <- rule(current.idx)
-      # }else
-      if(!all(
-        involved.slice %in% df.idx$silce[seq(i)][arr.assign == '']
-      ) & arr.assign[i] == ''){
-        # if all involved are later, this will be keep
-        arr.assign[i] <- ''
-      }else{
-        # otherwise
-        arr.assign[i] <- rule(current.idx)
-      }
-
-    }
-    arr.assign
-  #   return(arr.assign)
-  })
-  # }
-  arr.assign %>% view
-  # arr.assign.zero <- stringr::str_detect(arr.assign, '0')
-  # arr.assign.zero <- arr.assign[arr.assign.zero]
-
-  this.assign <- arr.assign
-  alge.itre <- 1
-  while(alge.itre <= 10){
-
-    arr.assign.zero <- stringr::str_split_fixed(this.assign, '<-', n = 2)
-    arr.assign.zero <-
-      !stringr::str_detect(arr.assign.zero[, 2], 'x') |
-      stringr::str_detect(arr.assign.zero[, 2], '0')
-    arr.assign.zero <- this.assign[arr.assign.zero]
-    arr.assign.zero <- arr.assign.zero[arr.assign.zero != '']
-
-    zero.terms <- unlist(stringr::str_extract_all(
-      stringr::str_remove_all(arr.assign.zero, '\\s'), '^.*(?=(<-))'
-    ))
-
-    zero <- sprintf(
-      '(%s)',
-      zero.terms %>% na.omit %>%
-        str_replace_all('\\[', '\\\\[') %>% str_replace_all('\\]', '\\\\]')
-    ) %>% paste(collapse = '|')
-    zero <- sprintf('(?<=(<-).{0,100})(%s)', zero)
-
-    this.assign <- this.assign %>% str_remove_all('\\s') %>%
-      stringr::str_replace_all(zero, '0')
-    tm.assign <- stringr::str_split_fixed(this.assign, '<-', n = 2)
-    idx.zero <- !stringr::str_detect(tm.assign[, 2], 'x') &
-      stringr::str_detect(tm.assign[, 2], '0')
-    tm.assign[idx.zero, 2] <- 0
-    idx.drop.zero <- stringr::str_detect(tm.assign[, 2], 'x') &
-      stringr::str_detect(tm.assign[, 2], '0')
-    tm.assign[idx.drop.zero, 2] <-
-      stringr::str_remove_all(tm.assign[idx.drop.zero, 2], '(\\+|-){0,1}0')
-    tm.assign <- sprintf('%s <- %s', tm.assign[, 1], tm.assign[, 2])
-    this.assign[this.assign != ''] <- tm.assign[this.assign != '']
-    alge.itre <- alge.itre + 1
+    })
+    ls.lin.sys <- unlist(ls.lin.sys, recursive = F)
+    # translate to coefficient vector
+    ls.coef <- lapply(ls.lin.sys, function(lin.sys){
+      where <- match(
+        sapply(lin.sys$idx, paste, collapse = ','),
+        df.subscript$subscript
+      )
+      arr.coef <- rep(0, nrow(df.subscript))
+      arr.coef[where] <- lin.sys$coef
+      arr.coef
+    })
+    # mat.coef is the coef matrix corr. sym.eqs, <==> mat.coef %*% x = 0
+    mat.coef <- do.call(rbind, ls.coef)
+    # use basis of its null space
+    vec.basis <- pracma::null(mat.coef)
   }
-  this.assign
+  # some trimming due to rounding error
+  vec.basis[abs(vec.basis) < .Machine$double.eps^(1/2)] <- 0
+  # maybe no need
+  # vec.basis <- apply(vec.basis, 2, function(x) x / max(abs(x)))
+  # vec.basis %>% print(digits = 2)
 
-  x <- array(NA, dim = dim)
-  for(i in seq_along(this.assign)){
-    eval(parse(text = this.assign[i]))
+  # combine and return
+  df.basis <- as.data.frame(vec.basis)
+  names(df.basis) <- sprintf('e%s', seq(ncol(df.basis)))
+  df.subscript <- cbind(
+    idx = seq(nrow(df.subscript)),
+    df.subscript,
+    df.basis
+  )
+  if(drop.zero){
+    # only keep non-zero
+    idx.keep <- rowSums(vec.basis != 0) >= 1
+
+    return(
+      df.subscript[idx.keep, , drop = F]
+    )
+  }else{
+    return(df.subscript)
   }
-  x
-  for(i in seq_along(arr.assign)){
-    eval(parse(text = arr.assign[i]))
-  }
-  # x
+
 }
 
 #' Decoding symmetry equalities for tensor.
@@ -884,7 +971,7 @@ vecTensorIdx <- function(d) {
 #' Currently only addition/subtraction is recognized.
 #' \cr
 #' The returned function takes argument \code{idx}, \code{name},
-#' and \code{full_assign}. See following examples for details.
+#' and \code{lin.sys}. See following examples for details.
 #'
 #' @export
 #'
@@ -896,10 +983,10 @@ vecTensorIdx <- function(d) {
 #' res.f(c(1, 2, 3, 4))
 #' x[2, 1, 3, 4]
 #' - x[2, 3, 1, 4] - x[3, 1, 2, 4]
-#' eval(parse(text = res.f(c(1, 2, 3, 4), full.assign = F)))
 #' x[1, 2, 3, 4]
-#' eval(parse(text = res.f(c(1, 2, 3, 4), full.assign = T)))
+#' eval(parse(text = res.f(c(1, 2, 3, 4))))
 #' x[1, 2, 3, 4]
+#' res.f(c(1, 2, 3, 4), lin.sys = T)
 decodeSymEq <- function(eq) {
 
   # decode symmetric using input subscript equality
@@ -924,12 +1011,14 @@ decodeSymEq <- function(eq) {
   eq.rhs.scr <- sapply(eq.rhs.terms, function(x) {
     stringr::str_split(x, '')[[1]]
   }, simplify = F)
-  eq.lhs.scr <- stringr::str_sort(stringr::str_split(eq.lhs, '')[[1]])
+  eq.lhs.scr <- stringr::str_split(eq.lhs, '')[[1]]
 
   # check index consistency
   stopifnot(!any(duplicated(eq.lhs.scr))) # unique subscript for each dim
   stopifnot(all(
-    sapply(eq.rhs.scr, function(x) identical(stringr::str_sort(x), eq.lhs.scr))
+    sapply(eq.rhs.scr, function(x) identical(
+      stringr::str_sort(x), stringr::str_sort(eq.lhs.scr)
+    ))
   ))
 
   eq.rhs.idx <- lapply(eq.rhs.scr, function(x) match(x, eq.lhs.scr))
@@ -937,13 +1026,13 @@ decodeSymEq <- function(eq) {
   # eq.lhs
   # eq.rhs.sign
   # eq.rhs.idx
-  res.f <- function(idx, name = 'x', full.assign = T, index.only = F) {
+  res.f <- function(idx, name = 'x', lin.sys = F) {
 
     # idx: integer vector for index, 1, 2, 3, ...
     # name: the name of the array to handle
-    # full.assign: to return "x[1,2] <- x[2,1]" or just the RHS "x[2,1]"
-    # index.only: if full.assign = F, to return c(2, 1) or "x[2,1]"
-    # note that if index.only, NO sign is included!
+    # lin.sys: if full.assign = F, to return coef used for linear system or not
+    # legacy: full.assign: to return "x[1,2] <- x[2,1]" or just the RHS "x[2,1]"
+
 
     stopifnot(length(idx) == length(eq.lhs.scr))
     stopifnot(is.character(name))
@@ -968,12 +1057,22 @@ decodeSymEq <- function(eq) {
       rhs.str <- '0'
     }
 
-    if(!full.assign){
-      if(index.only)
-        return(ls.rhs.idx)
-      else
-        return(rhs.str)
-    }
+    # if(!full.assign){
+      if(lin.sys){
+        ls.idx <- c(list(idx), ls.rhs.idx)
+        names(ls.idx) <- c(eq.lhs, names(ls.rhs.idx))
+        coef <- ifelse(eq.rhs.sign == '-', -1, 1)
+        coef <- c(1, -1 * coef)
+        # browser();QWER
+        # use unique index only
+        unique.idx <- unique(ls.idx)
+        tbl <- match(as.character(ls.idx), as.character(unique.idx))
+        # update
+        coef <- as.numeric(sapply(split(coef, tbl), sum))
+        return(list(coef = coef, idx = unique.idx))
+      }#else
+    #     return(rhs.str)
+    # }
 
     lhs.str <- sprintf('%s[%s]', name, paste(idx, collapse = ', '))
     return(sprintf("%s <- %s", lhs.str, rhs.str))
@@ -1099,6 +1198,8 @@ sigmoid.f.inv <- function(x){
 prodKN <- function(h, k){
 
   # Kulkarni--Nomizu product, c.f. eq (7.37) of Lee (2018)
+  # not tested, use with care
+
   if(missing(k)) k <- h
 
   stopifnot(identical(class(h), class(k)))
