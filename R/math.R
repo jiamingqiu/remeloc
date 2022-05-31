@@ -261,7 +261,7 @@ spaceSphere <- function(d, r = 1, chart = 'stereographic'){
     genPnt <- function(n){
       # random point generator, returns a matrix, one row = one point
       stopifnot(n > 0)
-      return(3 * r * matrix(runif(n * d), ncol = d, nrow = n))
+      return(3 * r * matrix(runif(n * d, -1, 1), ncol = d, nrow = n))
     }
 
     genGrid <- function(n){
@@ -458,18 +458,25 @@ locDist <- function(coord, dist, local.reach){
 #' # solve for geodesic curve from c(0.5, 0.5) w/ initial velocity c(1, 0)
 #' geo <- geo.f(c(0.5, 0.5), c(1, 0))
 #' plot(x = geo[, 'x1'], y = geo[, 'x2'], type = 'l')
-getGeodesic <- function(metric, d){
+getGeodesic <- function(metric, christ, d){
   # get a function computes geodesic
 
-  stopifnot(!missing(metric) & !missing(d))
-
-  metric <- metric
-  d <- d
-
-  stopifnot(inherits(metric, 'function'))
+  stopifnot((!missing(metric) | !missing(christ)) & !missing(d))
   stopifnot(d >= 1)
 
-  geo.eq <- getGeoEq(metric, d)
+  if(missing(christ)){
+
+    stopifnot(inherits(metric, 'function'))
+    geo.eq <- getGeoEq(metric = metric, d = d)
+
+  }else{
+
+    stopifnot(inherits(christ, 'function'))
+    geo.eq <- getGeoEq(christ = christ, d = d)
+
+  }
+
+
   res.f <- function(start.pnt, init.v, t = seq(0, 1, by = 0.01)){
 
     # geodesic curve from start w/ initial velocity, given grid of time
@@ -494,6 +501,7 @@ getGeodesic <- function(metric, d){
 #' Construct ODE for geodesic equation
 #'
 #' @param metric metric function
+#' @param christ christoffel symbol (function)
 #' @param d dimension
 #'
 #' @return a function representing geodesic equation following input metric that
@@ -509,17 +517,23 @@ getGeodesic <- function(metric, d){
 #'   c(rep(0.5, 2), c(1, 0)), times = seq(0, 5, by = 0.01), func = geo.eq
 #' )
 #' plot(x = geo[, 2], y = geo[, 3], type = 'l')
-getGeoEq <- function(metric, d){
+getGeoEq <- function(metric, christ, d){
 
-  stopifnot(!missing(metric) & !missing(d))
+  stopifnot((!missing(metric) | !missing(christ)) & !missing(d))
 
-  metric <- metric
-  d <- d
+  if(missing(christ)){
+    metric <- metric
+    d <- d
 
-  stopifnot(inherits(metric, 'function'))
-  stopifnot(d >= 1)
+    stopifnot(inherits(metric, 'function'))
+    stopifnot(d >= 1)
 
-  christ.f <- getChristoffel(metric, d)
+    christ.f <- getChristoffel(metric, d)
+  }else{
+
+    christ.f <- christ
+
+  }
 
   geo.eq <- function(t, y, ...) {
 
@@ -753,436 +767,92 @@ get13Curvature <- function(metric, d){
 
 }
 
-##### vectorization of Riemann curvature tensor ################################
+getSecCurvature <- function(metric, riem.cvt, d){
 
-# getTensorAction <- function(tensor){
-#   # vectorize x for later action from Riemann curvature (0,4)-tensor
-#   # TBD
-#   res.f <- function(...){
-#     as.name(match.call())
-#   }
-# }
+  # computes sectional curvature, c.f. pp.250 - 255, Lee (2018)
+  # metric & riem.cvt: metric anr (0, 4)-curvature tensor,
+  # must be both function or both tensor array. riem.cvt can be missing if
+  # metric is a function.
+  # d: dimension
+  # returns a function (target, v, w) computing sectional curvature
+  # at target of the plane spanned by v and w.
 
-modelMatRiemCvt <- function(df.idx, x, y, z, w){
+  # if(inherits(riem.cvt, 'function')){
+  #   riem.cvt <- riem.cvt
+  #   res.f <- function(target, ...) getSecCurvature(riem.cvt(target), ...)
+  #   return(res.f)
+  # }
 
-  # construct design matrix for local regression on Riemann (0,4)-curvature
-  # df.idx: result from vecRiemCvtIdx
-  # ...: 4 tensor arrays, no sanity check, make sure dimension match!
+  if(missing(riem.cvt)) riem.cvt <- NULL
 
-  # ls.args <- as.list(match.call())
-  # ls.args <- ls.args[-1]
-  # ls.args <- ls.args[!(names(ls.args) %in% 'df.idx')]
-  # stopifnot(length(ls.args) == 4)
+  if(!inherits(metric, 'function') & !inherits(riem.cvt, 'function')){
 
-  arr.r <- with(df.idx, {
-    x[, i1] * y[, i2] * z[, i3] * w[, i4]
-    # ls.args[[1]][, i1] * ls.args[[2]][, i2] *
-    #   ls.args[[3]][, i3] * ls.args[[1]][[4]][, i4]
-  }) # arr.r[, j] = term in df.idx[j, ]
-  # apply(arr.r, 2, sd) %>% log10
-  vec.cvt.basis <- as.matrix(
-    df.idx[, stringr::str_detect(names(df.idx), 'e\\d+'), drop = F]
-  )
-  # put the coef for basis into columns
-  mat.r <- -1 / 3 * apply(vec.cvt.basis, 2, function(x) {
-    rowSums(arr.r * x[col(arr.r)])
-  })
+    mat.met <- metric
+    tsr <- riem.cvt
 
-  return(mat.r)
+    # if input tensor array
+    res.f <- function(v, w){
 
-}
+      stopifnot(length(v) == d)
+      stopifnot(length(v) == length(w))
 
-#' Index table for vectorizing algebraic curvature tensor
-#'
-#' @param d dimension of vector space
-#'
-#' @return a data frame
-#' @export
-#'
-#' @details See \link{\code{vecTensorIdx}} for details. See p212, Lee (2018)
-#' for definition.
-#'
-#' @examples
-#' d <- 3
-#' manifold <- spaceHyperbolic(d, model = 'half')
-#' cvt04.f <- get04Curvature(manifold$metric, d = d)
-#' pnt <- manifold$genPnt(10)
-#' true.cvt <- apply(pnt, 1, cvt04.f) # flatten tensors
-#' df.idx <- vecRiemCvtIdx(d, drop.zero = F)
-#' # coefficients, the basis are orthonormal
-#' mat.basis <- as.matrix(
-#'   df.idx[, stringr::str_detect(names(df.idx), 'e\\d+'), drop = F]
-#' )
-#' coef.cvt <- apply(true.cvt, 2, function(x){
-#'   colSums(x * mat.basis)
-#' })
-#' coef.cvt <- matrix(coef.cvt, nrow = ncol(mat.basis))
-#' reconstruct.cvt <- mat.basis %*% coef.cvt
-#' all.equal(reconstruct.cvt, true.cvt)
-#' see.cvt <- cvt04.f(pnt[1, ])
-#' for(idx in seq(nrow(df.idx))){
-#'   stopifnot(all.equal(
-#'     reconstruct.cvt[idx, 1],
-#'     with(
-#'       df.idx[idx, sprintf('i%s', seq(4))],
-#'       see.cvt[i1, i2, i3, i4]
-#'     )
-#'   ))
-#' }
-vecRiemCvtIdx <- function(d, ...) {
-  # generate index of d-dim Riemann (0,4)-Curvature tensor following symmetries
+      stopifnot(all(dim(mat.met) == rep(length(v), 2)))
+      stopifnot(all(
+        dim(tsr) == rep(length(v), 4)
+      ))
 
-  sym.eq <- c(
-    'ijkl = -jikl' # means T(w, x, y, z) = T(x, w, y, z)
-    , 'ijkl = - ijlk'
-    , 'ijkl = klij'
-    , 'ijkl = -jkil - kijl'
-  )
-  res.dim <- d^2 * ( d^2 - 1 ) / 12
-  df.subscript <- vecTensorIdx(d = d, k = 4, sym.eq = sym.eq, ...)
-  stopifnot(ncol(df.subscript) == res.dim + 4 + 1 + 1)
+      # Riemann (0, 4)-curvature R(v, w, w, v)
+      tm.nu <- getTensorAction(tsr, v, w, w, v)
+      # wedge norm squared
+      tm.de <-
+        getTensorAction(mat.met, v, v) * getTensorAction(mat.met, w, w) -
+        getTensorAction(mat.met, v, w) ^ 2
 
-  return(df.subscript)
+      return(tm.nu / tm.de)
 
-}
-
-#' Index table for vectorizing tensor/multidimensional array w.r.t. symmetries
-#'
-#' @param d dimension of vector space
-#' @param k dimension of indices
-#' @param sym.eq equalities defining symmetries
-#' @param drop.zero whether to drop zeros in return
-#'
-#' @return a data frame
-#' @export
-#'
-#' @details The each row in the returned data frame represents one element in
-#' the desired tensor, and with the following columns:
-#' \describe{
-#'   \item{\code{idx}}{The index of the element if flatten.}
-#'   \item{\code{i1, ..., ik}, and \code{subscript}}{Subscripts.}
-#'   \item{\code{e1, ...}}{Basis used for representing.}
-#' }
-#' See \code{\link{decodeSymEq}} for how to specify symmetries.
-#'
-#' @examples
-#' # the algebraic curvature tensor
-#' vecTensorIdx(2, 4, sym.eq = c(
-#'   'ijkl = -jikl' , 'ijkl = - ijlk',
-#'   'ijkl = klij', 'ijkl = -jkil - kijl'
-#' ))
-vecTensorIdx <- function(d, k, sym.eq, drop.zero = T) {
-
-  # generate index for vectorization of tensor
-
-  # d <- 2
-  # k <- 4
-  # sym.eq <- list(
-  #   'ijkl = -jikl' # means T(w, x, y, z) = T(x, w, y, z)
-  #   , 'ijkl = - ijlk'
-  #   , 'ijkl = klij'
-  #   , 'ijkl = -jkil - kijl'
-  # )
-  # # res.dim <- d^2 * ( d^2 - 1 ) / 12
-
-  stopifnot(d >= 1)
-  stopifnot(k >= 1)
-
-  df.subscript <- expand.grid(rep(list(seq(d)), k))
-  names(df.subscript) <- sprintf('i%s', seq(k))
-  mat.subscript <- as.matrix(df.subscript)
-  df.subscript$subscript <- apply(mat.subscript, 1, function(idx){
-    paste(idx, collapse = ',')
-  })
-
-  if(missing(sym.eq)){
-    # if no symmetries, use all elements
-    vec.basis <- diag(nrow(df.subscript))
-  }else{
-    # if(!is.list(sym.eq)) sym.eq <- list(sym.eq)
-
-    # list of decoder according to rules
-    ls.rule <- lapply(sym.eq, decodeSymEq)
-    # constructing linear system per subscript combination accordingly
-    ls.lin.sys <- lapply(ls.rule, function(rule) {
-      apply(mat.subscript, 1, function(x) {
-        rule(as.numeric(x), lin.sys = T)
-      })
-    })
-    ls.lin.sys <- unlist(ls.lin.sys, recursive = F)
-    # translate to coefficient vector
-    ls.coef <- lapply(ls.lin.sys, function(lin.sys){
-      where <- match(
-        sapply(lin.sys$idx, paste, collapse = ','),
-        df.subscript$subscript
-      )
-      arr.coef <- rep(0, nrow(df.subscript))
-      arr.coef[where] <- lin.sys$coef
-      arr.coef
-    })
-    # mat.coef is the coef matrix corr. sym.eqs, <==> mat.coef %*% x = 0
-    mat.coef <- do.call(rbind, ls.coef)
-    # use basis of its null space
-    vec.basis <- pracma::null(mat.coef)
-  }
-  # some trimming due to rounding error
-  vec.basis[abs(vec.basis) < .Machine$double.eps^(1/2)] <- 0
-  # maybe no need
-  # vec.basis <- apply(vec.basis, 2, function(x) x / max(abs(x)))
-  # vec.basis %>% print(digits = 2)
-
-  # combine and return
-  df.basis <- as.data.frame(vec.basis)
-  names(df.basis) <- sprintf('e%s', seq(ncol(df.basis)))
-  df.subscript <- cbind(
-    idx = seq(nrow(df.subscript)),
-    df.subscript,
-    df.basis
-  )
-  if(drop.zero){
-    # only keep non-zero
-    idx.keep <- rowSums(vec.basis != 0) >= 1
-
-    return(
-      df.subscript[idx.keep, , drop = F]
-    )
-  }else{
-    return(df.subscript)
-  }
-
-}
-
-#' Decoding symmetry equalities for tensor.
-#'
-#' @param eq equality determining symmetries
-#'
-#' @return a function
-#'
-#' @details
-#' The equality specifies symmetries of tensor in terms of subscripts.
-#' For example, given a (0,4)-tensor \eqn{R}, setting \code{eq} being
-#' \code{'ijkl = -jikl'} means
-#' \eqn{R_{ijkl} = -R_{jikl}}.
-#' Similarly, \code{'ijkl = -jkil - kijl'} means
-#' \eqn{R_{ijkl} = -R_{jkil} - R_{kijl}} (algebraic Bianchi identity).
-#' There should be only one term to left hand side of \code{eq}, while the terms
-#' to the right hand side should use identical indices (i,j,k,l, per say).
-#' Also, indices for different dimension should be unique.
-#' Currently only addition/subtraction is recognized.
-#' \cr
-#' The returned function takes argument \code{idx}, \code{name},
-#' and \code{lin.sys}. See following examples for details.
-#'
-#' @export
-#'
-#' @examples
-#' x <- array(seq(256), rep(4, 4))
-#' # algebraic Bianchi identity for (0,4)-curvature tensor
-#' res.f <- decodeSymEq('ijkl = -jkil - kijl')
-#' x[1, 2, 3, 4]
-#' res.f(c(1, 2, 3, 4))
-#' x[2, 1, 3, 4]
-#' - x[2, 3, 1, 4] - x[3, 1, 2, 4]
-#' x[1, 2, 3, 4]
-#' eval(parse(text = res.f(c(1, 2, 3, 4))))
-#' x[1, 2, 3, 4]
-#' res.f(c(1, 2, 3, 4), lin.sys = T)
-decodeSymEq <- function(eq) {
-
-  # decode symmetric using input subscript equality
-  # gives a function that returns string "x[1, 2, 3, 4] <- x[2, 1, 3, 4]"
-
-  # eq <- 'ijkl = - jikl'
-  # eq <- 'ijkl = -jkil - kijl'
-  eq <- stringr::str_remove_all(eq, ' ')
-  eq <- stringr::str_split(eq, '=')[[1]]
-
-  eq.lhs <- eq[1]
-  stopifnot(!stringr::str_detect(eq.lhs, '(\\+)|(\\-)'))
-  eq.rhs <- eq[2]
-
-  # stringr::str_split('jklm+abcd-klmv', '.{0}(?=(\\+)|(\\-))') # magic...
-  eq.rhs.terms <- stringr::str_split(eq.rhs, '.{0}(?=(\\+)|(\\-))')[[1]]
-  eq.rhs.terms <- eq.rhs.terms[sapply(eq.rhs.terms, stringr::str_length) > 0]
-  eq.rhs.sign <- stringr::str_extract(eq.rhs.terms, '(\\+)|(\\-)')
-  eq.rhs.sign[is.na(eq.rhs.sign)] <- ''
-  eq.rhs.terms <- stringr::str_remove_all(eq.rhs.terms, '(\\+)|(\\-)')
-
-  eq.rhs.scr <- sapply(eq.rhs.terms, function(x) {
-    stringr::str_split(x, '')[[1]]
-  }, simplify = F)
-  eq.lhs.scr <- stringr::str_split(eq.lhs, '')[[1]]
-
-  # check index consistency
-  stopifnot(!any(duplicated(eq.lhs.scr))) # unique subscript for each dim
-  stopifnot(all(
-    sapply(eq.rhs.scr, function(x) identical(
-      stringr::str_sort(x), stringr::str_sort(eq.lhs.scr)
-    ))
-  ))
-
-  eq.rhs.idx <- lapply(eq.rhs.scr, function(x) match(x, eq.lhs.scr))
-  # construct resulting "deparse" function for lhs
-  # eq.lhs
-  # eq.rhs.sign
-  # eq.rhs.idx
-  res.f <- function(idx, name = 'x', lin.sys = F) {
-
-    # idx: integer vector for index, 1, 2, 3, ...
-    # name: the name of the array to handle
-    # lin.sys: if full.assign = F, to return coef used for linear system or not
-    # legacy: full.assign: to return "x[1,2] <- x[2,1]" or just the RHS "x[2,1]"
-
-
-    stopifnot(length(idx) == length(eq.lhs.scr))
-    stopifnot(is.character(name))
-
-    # repermute according to prespecified rules
-    ls.rhs.idx <- lapply(eq.rhs.idx, function(x) idx[x])
-    rhs.str <- lapply(ls.rhs.idx, function(x){
-      sprintf('%s[%s]', name, paste(x, collapse = ', '))
-    })
-    # add sign
-    rhs.str <- mapply(
-      function(term, sign) sprintf('%s %s', sign, term),
-      term = rhs.str, sign = eq.rhs.sign
-    )
-    # combine
-    rhs.str <- paste(rhs.str, collapse = '')
-    if(
-      length(eq.rhs.sign) == 1 & eq.rhs.sign[1] == '-' &
-      all(ls.rhs.idx[[1]] == idx)
-    ) {
-      # if x[1,2,3,3] <- - x[1,2,3,3]
-      rhs.str <- '0'
     }
 
-    # if(!full.assign){
-      if(lin.sys){
-        ls.idx <- c(list(idx), ls.rhs.idx)
-        names(ls.idx) <- c(eq.lhs, names(ls.rhs.idx))
-        coef <- ifelse(eq.rhs.sign == '-', -1, 1)
-        coef <- c(1, -1 * coef)
-        # browser();QWER
-        # use unique index only
-        unique.idx <- unique(ls.idx)
-        tbl <- match(as.character(ls.idx), as.character(unique.idx))
-        # update
-        coef <- as.numeric(sapply(split(coef, tbl), sum))
-        return(list(coef = coef, idx = unique.idx))
-      }#else
-    #     return(rhs.str)
-    # }
+  }else{
 
-    lhs.str <- sprintf('%s[%s]', name, paste(idx, collapse = ', '))
-    return(sprintf("%s <- %s", lhs.str, rhs.str))
+    stopifnot(inherits(metric, 'function'))
+    # riem.cvt <- get04Curvature(metric, d)
+    if(is.null(riem.cvt)) riem.cvt <- get04Curvature(metric, d)
+
+    res.f <- function(target, v, w) getSecCurvature(
+      metric = metric(target), riem.cvt = riem.cvt(target), d = d
+    )(v, w)
 
   }
-
   return(res.f)
 
-}
 
-##### vectorization of quadratic forms #########################################
+  # res.f <- function(target, v, w){
+  #
+  #   stopifnot(length(v) == d)
+  #   stopifnot(length(v) == length(w))
+  #
+  #   mat.met <- metric(target)
+  #   tsr <- riem.cvt(target)
+  #   stopifnot(all(dim(mat.met) == rep(length(v), 2)))
+  #   stopifnot(all(
+  #     dim(tsr) == rep(length(v), 4)
+  #   ))
+  #
+  #   # Riemann (0, 4)-curvature R(v, w, w, v)
+  #   tm.nu <- getTensorAction(tsr, v, w, w, v)
+  #   # wedge norm squared
+  #   # idx <- vecQuadIdx(d = nrow(mat.met), idx.vec = T)
+  #   # vec.v <- vecQuad(v)
+  #   # vec.w <- vecQuad(w)
+  #   tm.de <-
+  #     getTensorAction(mat.met, v, v) * getTensorAction(mat.met, w, w) -
+  #     getTensorAction(mat.met, v, w) ^ 2
+  #
+  #   return(tm.nu / tm.de)
+  #
+  # }
 
-vecQuadIdx <- function(d, idx.vec = F){
-  # generate combinations of seq(d) taken 2 at a time
-  # with replacement.
-  # Returns: a 2 X d(d-1)/2 where each column is a
-  # combination.
-  stopifnot(d >= 2)
-  res <- cbind(
-    # diag elements
-    t(matrix(seq(d), nrow = d, ncol = 2)),
-    utils::combn(d, 2) # non-diag elements
-  )
 
-  if(!idx.vec){
-    return(res)
-  }else{
-    return(
-      res[2, ] + d * (res[1, ] - 1)
-    )
-  }
-
-}
-
-symMat2Vec <- function(mat) {#vecSymMat(mat)
-# vecSymMat <- function(mat){
-  # vectorize a symmetric matrix following vecQuadIdx
-  # input a d-by-d symmetric matrix
-  # output a d * (d + 1) / 2 array
-
-  stopifnot(isSymmetric(mat))
-  d <- nrow(mat)
-  idx <- vecQuadIdx(d)
-  idx <- idx[2, ] + d * (idx[1, ] - 1)
-  return(as.numeric(mat[idx]))
-}
-# symMat2Vec(diag(3))
-# symMat2Vec(matrix(seq(9), 3) + t(matrix(seq(9), 3)))
-
-vec2SymMat <- function(vec){
-  # construct symmetric matrix following vecQuadIdx
-  d <- (sqrt(8 * length(vec) + 1) - 1) / 2
-  mat <- matrix(NA, d, d)
-  mat[vecQuadIdx(d, T)] <- vec
-  mat[is.na(mat)] <- mat[is.na(t(mat))]
-  # mat <- (mat + t(mat)) / 2
-  # diag(mat) <- vec[seq(d)]
-  return(mat)
-}
-
-#' Vectorization of terms in quadratic form.
-#' @md
-#' @param x an array or a matrix
-#'
-#' @return a matrix with each row being vectorized quadratic form.
-#'
-#' @details Columns will be in the order of
-#'   \eqn{x_1^2, \dots, x_d^2, x_1x_2, \dots, x_{d-1}x_d}.
-#' @export
-#'
-#' @examples TBD
-vecQuad <- function(x){
-  # vectorization of quadratic form
-  # x: an array or a matrix
-  # return: a matrix
-  if(!is.matrix(x))
-    x <- matrix(x, nrow = 1)
-  d <- ncol(x)
-  if(is.null(colnames(x))){
-    colnames(x) <- sprintf('x%s', seq(d))
-  }
-  # index and names of vectorized result
-  idx.col <- vecQuadIdx(d)
-  nm.col <- colnames(x)
-  nm.col <- sprintf(
-    '%s*%s',
-    nm.col[idx.col[1, ]],
-    nm.col[idx.col[2, ]]
-  )
-  res <- x[, idx.col[1, ], drop=FALSE] * x[, idx.col[2, ], drop=FALSE]
-  colnames(res) <- nm.col
-  return(res)
-}
-
-#' Quadratic form
-#'
-#' @param mat.x a matrix
-#' @param mat.a symmetric matrix of coefficients.
-#'
-#' @return a ncol(mat.x) X ncol(mat.x) matrix.
-#' @details compute \code{t(mat.x) \%*\% mat.a \%*\% mat.x}, so the (i, j)
-#' element is \code{mat.x[, i] \%*\% mat.a \%*\% mat.x[, j]}.
-#' @export
-#' @md
-#' @examples TBD
-quadForm <- function(mat.x, mat.a){
-  # compute t(mat.x) %*% mat.a %*% mat.x
-  res <- crossprod(mat.x, mat.a)
-  res <- tcrossprod(res, t(mat.x))
-  return(res)
 }
 
 ##### additional function ######################################################
@@ -1193,47 +863,4 @@ sigmoid.f <- function(x){
 }
 sigmoid.f.inv <- function(x){
   log(x / (1 - x))
-}
-
-prodKN <- function(h, k){
-
-  # Kulkarni--Nomizu product, c.f. eq (7.37) of Lee (2018)
-  # not tested, use with care
-
-  if(missing(k)) k <- h
-
-  stopifnot(identical(class(h), class(k)))
-  if(inherits(h, 'function')){
-    res.f <- function(...){
-      prodKN(h(...), k(...))
-    }
-    return(res.f)
-  }
-
-  stopifnot(all(dim(h) == dim(k)))
-  d <- dim(h)[1]
-  stopifnot(all(dim(h) == d))
-  stopifnot(length(dim(h)) == 2)
-
-  # augment h and k
-  aug.h <- array(h, dim = rep(d, 4)) # aug.h[i,j,l,m]=h[i,j]
-  aug.k <- array(k, dim = rep(d, 4)) # aug.k[i,j,l,m]=k[i,j]
-
-  # arr.prod[i,j,l,m] = h[i,m] * k[j,l]
-  arr.prod <-
-    #..[i,j,l,m] = aug.h[i,m,j,l], <--> aug.h[i,j,l,m] = ..[i,l,m,j]
-    aperm(aug.h, c(1, 3, 4, 2)) *
-    #..[i,j,l,m] = aug.k[j,l,i,m], <--> aug.k[i,j,l,m] = ..[l,i,j,m]
-    aperm(aug.k, c(3, 1, 2, 4))
-
-  res.arr <- arr.prod +
-    #..[i,j,l,m] = arr.prod[j,i, m,l] = h[j,l] * k[i,m]
-    aperm(arr.prod, c(2, 1, 4, 3)) -
-    #..[i,j,l,m] = arr.prod[i,j,m,l] = h[i,l] * k[j,m]
-    aperm(arr.prod, c(1, 2, 4, 3)) -
-    #..[i,j,l,m] = arr.prod[j,i,m,l] = h[j,m] * k[i,l]
-    aperm(arr.prod, c(2, 1, 3, 4))
-
-  return(res.arr)
-
 }

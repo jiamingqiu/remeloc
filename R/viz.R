@@ -1,6 +1,99 @@
 # functions for visualization
 # suggested: tidyverse
 
+approxfunTensor <- function(coord, tensor, sym.eq = NULL){
+  # create approximating (interpolation) function of metric
+  # use locfit for now, not good (too smooth), high-d interpolation TBD
+
+  stopifnot(nrow(coord) > 2)
+
+  if(inherits(tensor, 'function'))
+    return(
+      approxfunTensor(coord, apply(coord, 1, tensor, simplify = F), sym.eq)
+    )
+
+  stopifnot(inherits(tensor, 'list'))
+  stopifnot(length(tensor) == nrow(coord))
+  stopifnot(all(
+    sapply(tensor, function(x) all(dim(x) == dim(tensor[[1]])))
+  ))
+
+  # dim and rank
+  d <- ncol(coord)
+  k <- length(dim(tensor[[1]]))
+
+  df.idx <- vecTensorIdx(
+    d = d, k = k,
+    sym.eq = sym.eq, drop.zero = T
+  )
+  vec.tsr.basis <- as.matrix(
+    df.idx[, stringr::str_detect(names(df.idx), 'tsr\\.e\\d+'), drop = F]
+  )
+
+
+  # compute projection score of tensor to tensor.basis
+  # proj.tsr.basis <- tcrossprod(vec.tsr.basis)
+  vec.tsr <- sapply(tensor, function(tsr) tsr[df.idx$idx]) # 1 col = 1 tensor
+  # sum( (vec.tsr - crossprod(proj.tsr.basis, vec.tsr))^2 )
+  vec.tsr <- crossprod(vec.tsr.basis, vec.tsr) #1col = 1 proj.score
+
+  dat.coord <- as.data.frame(coord)
+  names(dat.coord) <- sprintf('x%s', seq(d))
+
+  # fit local polynomial
+  ls.fit <- apply(vec.tsr, 1, function(arr.comp) {
+    w.dat <- dat.coord
+    w.dat$y <- arr.comp
+    fit <- do.call(locfit::locfit, c(list(
+      formula = as.formula(sprintf(
+        'y ~ locfit::lp(%s)', paste(names(dat.coord), collapse = ',')
+      )),
+      data = w.dat
+    )))
+    fit$call <- NULL
+    return(fit)
+  })
+
+  # construct return function
+  res.f <- function(target){
+
+    # interpolated metric, target: 1point, returns a matrix
+
+    if(!is.matrix(target)) target <- matrix(target, nrow = 1)
+    stopifnot(ncol(target) == d)
+    # # for the moment
+    # stopifnot(nrow(target) > 1)
+
+    new.dat <- as.data.frame(target)
+    names(new.dat) <- sprintf('x%s', seq(d))
+    n.target <- nrow(new.dat)
+
+    mat.pred <- sapply(ls.fit, function(fit){
+      # arr.pred <- rep(NA, n.target)
+      arr.pred <- locfit:::predict.locfit(fit, newdata = new.dat)
+      stopifnot(length(arr.pred) == n.target)
+      return(arr.pred)
+    }) # 1col = 1 component func (<~> proj.score), 1row = 1target pnt
+    if(n.target == 1) mat.pred <- matrix(mat.pred, nrow = 1)
+
+    # browser();QWER
+    mat.tsr <- tcrossprod(vec.tsr.basis, mat.pred) # 1col = 1 target pnt
+    ls.res <- apply(mat.tsr, 2, function(arr){
+      ps.tsr <- array(0, dim = rep(d, k))
+      ps.tsr[df.idx$idx] <- arr
+      ps.tsr
+    }, simplify = F)
+
+    if(n.target == 1)
+      return(ls.res[[1]])
+    else
+      return(ls.res)
+
+  }
+
+  return(res.f)
+}
+
 approxfunMetric <- function(coord, metric){
   # create approximating (interpolation) function of metric
   # use locfit for now, not good (too smooth), high-d interpolation TBD
@@ -64,11 +157,13 @@ approxfunMetric <- function(coord, metric){
   return(res.f)
 }
 
-#' draw ellipses of equal geodesic distance to center points
+#' Draw ellipses of equal geodesic distance to center points
 #'
 #' @param coord matrix of centers, 1 row is 1 point
 #' @param metric list of metric matrices or a function
 #' @param radius radius for \code{car::ellipse}, missing then 1
+#' @param tissot to provide Tissot indicatrices (equal geodesic distance) or
+#' geodesic distance of equal displacement in coordinate chart
 #' @param ... additional arguments for \code{car::ellipse}
 #'
 #' @return a data frame whose first column is row number of \code{coord}, while
@@ -98,13 +193,20 @@ approxfunMetric <- function(coord, metric){
 #' ggplot2::ggplot(df.ell, ggplot2::aes(x, y, group = idx.pnt)) +
 #'   ggplot2::geom_path() + ggplot2::coord_fixed()
 #' # Poincare half-space model for hyperbolic space.
-#' df.ell <- with(spaceHyperbolic(d = 2, model = 'half'), {
+#' df.tissot <- with(spaceHyperbolic(d = 2, model = 'half'), {
 #'   getMetricEllipsoid(genGrid(3) + 0.5, metric, radius = 0.1)
 #' })
+#' df.ell <- with(spaceHyperbolic(d = 2, model = 'half'), {
+#'   getMetricEllipsoid(
+#'     genGrid(3) + 0.5, metric, radius = 0.1, tissot = F
+#'   )
+#' })
 #' head(df.ell)
+#' ggplot2::ggplot(df.tissot, ggplot2::aes(x, y, group = idx.pnt)) +
+#'   ggplot2::geom_path() + ggplot2::coord_fixed()
 #' ggplot2::ggplot(df.ell, ggplot2::aes(x, y, group = idx.pnt)) +
 #'   ggplot2::geom_path() + ggplot2::coord_fixed()
-getMetricEllipsoid <- function(coord, metric, radius, ...){
+getMetricEllipsoid <- function(coord, metric, radius, tissot = T, ...){
   # create data.frame of ellipsoid for plotting, currently 2-dim only
   # this function gives you ellipses of equal geodesic distance to the coord
 
@@ -122,6 +224,9 @@ getMetricEllipsoid <- function(coord, metric, radius, ...){
   stopifnot(nrow(coord) == length(metric))
   stopifnot(is.list(metric))
   stopifnot(all(sapply(metric, dim) == ncol(coord)))
+  if(tissot){
+    metric <- lapply(metric, MASS::ginv)
+  }
 
   if(ncol(coord) != 2) stop('currently only supports d = 2.')
 
@@ -130,7 +235,9 @@ getMetricEllipsoid <- function(coord, metric, radius, ...){
   input.args <- as.list(f.call)[-1]
   if(is.null(input.args$radius)) input.args$radius <- 1
 
-  not.my.args <- input.args[setdiff(names(input.args), c('coord', 'metric'))]
+  not.my.args <- input.args[setdiff(names(input.args), c(
+    'coord', 'metric', 'tissot'
+  ))]
 
   ls.ell <- base::mapply(function(center, mat) {
     # mat <- mat / sum(mat ^ 2) # unify size first
@@ -268,7 +375,7 @@ plotGraph <- function(coord, edge, get.plt.dat = F, max.n.edge = 500){
       # rows = ggplot2::vars('plt.y'), cols = ggplot2::vars('plt.x'),
       as.formula('plt.y ~ plt.x'),
       labeller = ggplot2::label_both
-    )
+    ) #+ ggplot2::coord_fixed() # save for user, in case sf?
 
   return(plt)
 

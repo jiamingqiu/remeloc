@@ -62,7 +62,7 @@ Next, "fit" a model, namely specify local regression structures. Here we specify
 fit <- fitMetric(
   y ~ p1 : p2, 
   data = dat, coord = obsv.coord, 
-  optns = list(n.local = 10^4)
+  optns = list(n.local = 10^4, local.reach = 0.2)
 )
 ```
 
@@ -72,7 +72,7 @@ Then we estimate metric tensor at targeted points using the model. This could ta
 target <- manifold$genGrid(128) * coef.shrink
 # parallel estimation
 system.time({
-  N.CORES <- 20
+  N.CORES <- 10
   doParallel::registerDoParallel(cores = N.CORES)
   st.time <- proc.time()
   esti.metric <- foreach(
@@ -80,12 +80,18 @@ system.time({
       target, # %>% head(2 * N.CORES), 
       cut(seq(nrow(target)), N.CORES)
     ),
-    .export = 'fit', .packages = 'remeloc', .errorhandling = 'pass'
+    # .export = 'fit',
+    .packages = 'remeloc', .errorhandling = 'pass'
   ) %dopar% {
     estiMetric(w.target, fit)
   }
-  esti.metric <- unlist(esti.metric, recursive = F)
+  doParallel::stopImplicitCluster()
 })
+if(!any(sapply(esti.metric, inherits, what = 'error'))){
+  esti.metric <- unlist(esti.metric, recursive = F)
+}else{
+  stop('Error in parallel resluts.')
+}
 ```
 
 
@@ -148,7 +154,10 @@ Currently the "approxfunMetric" uses local polynomial to provide a smoothed esti
 ```{r fig.width=6.5, fig.height=4}
 approx.metric <- approxfunMetric(target, esti.metric)
 geo.f.true <- getGeodesic(manifold$metric, d = d)
-geo.f.esti <- getGeodesic(function(x){estiMetric(x, fit)[[1]]}, d = d)
+geo.f.esti <- getGeodesic(function(x){estiMetric(x, fit, optns = list(
+  # even a larger bandwidth cannot help
+  local.reach = 0.25
+))[[1]]}, d = d)
 geo.f.approx <- getGeodesic(approx.metric, d = d)
 df.geo <- bind_rows(
   geo.f.true(rep(0.75, d), c(-1, 0)) %>% as.data.frame %>% as_tibble %>%

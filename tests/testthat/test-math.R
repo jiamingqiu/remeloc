@@ -1,3 +1,4 @@
+
 test_that("Riemann curvature tensors", {
 
   d <- 3
@@ -83,18 +84,6 @@ test_that('geodesic', {
   expect_identical(geo.curve[, 'x2'], geo.curve[, 'time'])
   expect_identical(geo.curve[, 'v1'], rep(1, nrow(geo.curve)))
   expect_identical(geo.curve[, 'v2'], rep(1, nrow(geo.curve)))
-
-})
-
-test_that("vectorizing symmetric matrix", {
-
-  mat <- matrix(runif(3 * 3), 3, 3)
-  mat <- (mat + t(mat)) / 2
-  vec <- c(diag(mat), mat[lower.tri(mat)])
-
-  expect_identical(vec2SymMat(vec), mat)
-  expect_identical(symMat2Vec(mat), vec)
-  expect_identical(mat[vecQuadIdx(3, T)], vec)
 
 })
 
