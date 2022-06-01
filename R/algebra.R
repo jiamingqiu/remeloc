@@ -29,7 +29,7 @@ termMetric <- function(d, method = 'adhoc'){
       if(missing(cd.cd)) cd.cd <- cd0 - cd1
       mat <- cd.cd[, df.idx$i1] * cd.cd[, df.idx$i2]
       mat[, -seq(d)] <- 2 * mat[, -seq(d)]
-      colnames(mat) <- sprintf('vec.metric.%s', seq(ncol(mat)))
+      colnames(mat) <- sprintf('metric.%s', seq(ncol(mat)))
       return(mat)
     }
     # tensor <--> vector translators
@@ -53,7 +53,7 @@ termMetric <- function(d, method = 'adhoc'){
     # model matrix constructor
     modelMat <- function(cd.cd, cd0, cd1) {
       mat <- modelMatMetric(df.idx, cd.cd, cd0, cd1)
-      colnames(mat) <- sprintf('vec.metric.%s', seq(ncol(mat)))
+      colnames(mat) <- sprintf('metric.%s', seq(ncol(mat)))
       return(mat)
     }
 
@@ -121,7 +121,7 @@ termPreChrist <- function(d, method = 'adhoc'){
         cd.cd[, i3] * (cd0[, i1] * cd0[, i2] - cd1[, i1] * cd1[, i2])
       })
       mat[, df.idx$off.diag] <- 2 * mat[, df.idx$off.diag]
-      colnames(mat) <- sprintf('vec.preChrist.%s', seq(ncol(mat)))
+      colnames(mat) <- sprintf('pre.christ.%s', seq(ncol(mat)))
       return(mat)
     }
     # tensor <--> vector translators
@@ -149,7 +149,7 @@ termPreChrist <- function(d, method = 'adhoc'){
     # model matrix constructor
     modelMat <- function(cd.cd, cd0, cd1) {
       mat <- modelMatPreChrist(df.idx, cd.cd, cd0, cd1)
-      colnames(mat) <- sprintf('vec.preChrist.%s', seq(ncol(mat)))
+      colnames(mat) <- sprintf('pre.christ.%s', seq(ncol(mat)))
       return(mat)
     }
 
@@ -212,6 +212,43 @@ preChrist2Christ <- function(pre.christ, metric){
   )
 
   return(arr.christ)
+
+}
+
+termRiemCvt <- function(d){
+  # return tools(functions) used to construct pre-Christ term
+  # sum_{i, m, n} ( cd0[i] - cd1[i] ) * (cd0[m] * cd0[n] - cd1[m] * cd1[n]) * (
+  #   Christ_{m, n}^j * metric[i, j]
+  # )
+
+  # index for vectorizing curvature tensor action
+  df.idx <- vecRiemCvtIdx(d = d)
+  # basis for the vectorization
+  vec.tsr.basis <- as.matrix(df.idx[
+    , stringr::str_detect(names(df.idx), 'tsr\\.e\\d+'), drop = F
+  ])
+  # model matrix constructor
+  modelMat <- function(cd.cd, cd0, cd1) {
+    mat <- -1/3 * modelMatRiemCvt(df.idx, cd0, cd1, cd1, cd0)
+    colnames(mat) <- sprintf('cvt.%s', seq(ncol(mat)))
+    return(mat)
+  }
+
+  # tensor <--> vector translators
+  tsr2vec <- function(tensor) {
+    # compute projection score from input array
+    colSums(tensor[df.idx$idx][row(vec.tsr.basis)] * vec.tsr.basis)
+  }
+  vec2tsr <- function(vec){
+    tsr <- array(0, dim = rep(d, 4))
+    tsr[df.idx$idx] <- rowSums(vec.tsr.basis * vec[col(vec.tsr.basis)])
+    return(tsr)
+  }
+
+  return(list(
+    df.idx = df.idx, vec.tsr.basis = vec.tsr.basis,
+    modelMat = modelMat, tsr2vec = tsr2vec, vec2tsr = vec2tsr
+  ))
 
 }
 
@@ -302,6 +339,7 @@ modelMatRiemCvt <- function(df.idx, x, y, z, w){
   # construct design matrix for local regression on Riemann (0,4)-curvature
   # df.idx: result from vecRiemCvtIdx
   # ...: 4 tensor arrays, no sanity check, make sure dimension match!
+  # also, no adjustment for potential bias due to using coordinate
 
   # ls.args <- as.list(match.call())
   # ls.args <- ls.args[-1]
