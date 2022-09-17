@@ -1,5 +1,16 @@
 # Utility functions
 
+test_that("indexing of 2-combinations", {
+  expect_identical(
+    comb2_vec2idx(seq(choose(20, 2)), 20),
+    combn(20, 2)
+  )
+  expect_identical(
+    comb2_idx2vec(combn(20, 2), 20),
+    as.numeric(seq(choose(20, 2)))
+  )
+})
+
 test_that("QuadForm", {
   arr.x <- seq(3)
   expect_identical(

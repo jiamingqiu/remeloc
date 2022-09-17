@@ -1,7 +1,9 @@
 # functions for visualization
 # suggested: tidyverse
 
-approxfunTensor <- function(coord, tensor, sym.eq = NULL){
+approxfunTensor <- function(
+    coord, tensor, sym.eq = NULL, bw = NULL, optns.locfit = list()
+){
   # create approximating (interpolation) function of metric
   # use locfit for now, not good (too smooth), high-d interpolation TBD
 
@@ -46,10 +48,12 @@ approxfunTensor <- function(coord, tensor, sym.eq = NULL){
     w.dat$y <- arr.comp
     fit <- do.call(locfit::locfit, c(list(
       formula = as.formula(sprintf(
-        'y ~ locfit::lp(%s)', paste(names(dat.coord), collapse = ',')
+        'y ~ locfit::lp(%s, h = %s)',
+        paste(names(dat.coord), collapse = ','),
+        deparse(bw)
       )),
       data = w.dat
-    )))
+    ), optns.locfit))
     fit$call <- NULL
     return(fit)
   })
@@ -94,7 +98,7 @@ approxfunTensor <- function(coord, tensor, sym.eq = NULL){
   return(res.f)
 }
 
-approxfunMetric <- function(coord, metric){
+approxfunMetric <- function(coord, metric, bw = NULL, optns.locfit = list()){
   # create approximating (interpolation) function of metric
   # use locfit for now, not good (too smooth), high-d interpolation TBD
 
@@ -117,10 +121,12 @@ approxfunMetric <- function(coord, metric){
     w.dat$y <- arr.comp
     do.call(locfit::locfit, c(list(
       formula = as.formula(sprintf(
-        'y ~ locfit::lp(%s)', paste(names(dat.coord), collapse = ',')
+        'y ~ locfit::lp(%s, h = %s)',
+        paste(names(dat.coord), collapse = ','),
+        deparse(bw)
       )),
       data = w.dat
-    )))
+    ), optns.locfit))
   })
 
   # construct return function
@@ -164,20 +170,27 @@ approxfunMetric <- function(coord, metric){
 #' @param radius radius for \code{car::ellipse}, missing then 1
 #' @param tissot to provide Tissot indicatrices (equal geodesic distance) or
 #' geodesic distance of equal displacement in coordinate chart
-#' @param ... additional arguments for \code{car::ellipse}
+#' @param ...
 #'
 #' @return a data frame whose first column is row number of \code{coord}, while
 #' the rest are coordinates.
 #'
 #' @export
 #'
-#' @details For a given center point \eqn{p} and metric tensor \eqn{G},
-#' provide points \eqn{(x - p)^T G (x - p) = c} where \eqn{c} is a constant
-#' determined by \code{radius}.
-#' \cr
+#' @details
+#' For a given center point \eqn{p} and metric tensor \eqn{G},
+#' if \code{tissot = TRUE}, compute equal geodesic ellipses, points \eqn{x}
+#' satisfying \eqn{(x - p)^T G (x - p) = c} with \code{c = radius ^ 2}.
 #' Note that this function does not solve for geodesic curves, and the "equal
 #' geodesic distance" is computed by local Euclidean approximation, which means
 #' one shall not use this for large domain characterization.
+#' \cr
+#' If \code{tissot = FALSE}, give coordinates for
+#' \eqn{(x - p)^T G^{-1} (x - p) = c} with \code{c = radius ^ 2}, which is the
+#' cost (geodesic distance) of displacement in coordinate chart. For example,
+#' for radius 1, the length of its longer axis equals to the square-root of the
+#' larger eigenvalue of the metric tensor, whose square is the geodesic distance
+#' of 1 unit displacement in coordinates along such direction.
 #'
 #' @examples
 #' df.ell <- getMetricEllipsoid(rep(0, 2), diag(c(1, 5)), radius = 1)
@@ -225,7 +238,9 @@ getMetricEllipsoid <- function(coord, metric, radius, tissot = T, ...){
   stopifnot(is.list(metric))
   stopifnot(all(sapply(metric, dim) == ncol(coord)))
   if(tissot){
-    metric <- lapply(metric, MASS::ginv)
+    metric <- lapply(metric, function(x) {
+      MASS::ginv(x + 0.01 * max(abs(x)) * diag(ncol(x)))
+    })
   }
 
   if(ncol(coord) != 2) stop('currently only supports d = 2.')
@@ -243,9 +258,9 @@ getMetricEllipsoid <- function(coord, metric, radius, tissot = T, ...){
     # mat <- mat / sum(mat ^ 2) # unify size first
     # mat <- mat
     ls.args <- c(list(
-      center = as.numeric(center), shape = MASS::ginv(mat), draw = F
+      center = as.numeric(center), shape = mat
     ), not.my.args)
-    tm <- as.data.frame(do.call(car::ellipse, ls.args))
+    tm <- as.data.frame(do.call(ellipse2D, ls.args))
     return(tm)
   }, center = asplit(coord, 1), mat = metric, SIMPLIFY = F)
 
@@ -433,5 +448,29 @@ getMetricDF <- function(coord, metric){
   return(df.metric)
 
 }
+
+
+ellipse2D <- function (center, shape, radius, segments = 51) {
+
+  # modified based on car::ellipse, give coordinates for ellipse
+  # {x: t(x - center) %*% solve(shape) %*% (x - center) = radius ^ 2}
+
+  if (!(is.vector(center) && 2 == length(center)))
+    stop("center must be a vector of length 2")
+  if (!(is.matrix(shape) && all(2 == dim(shape))))
+    stop("shape must be a 2 by 2 matrix")
+  if (max(abs(shape - t(shape)))/max(abs(shape)) > 1e-10)
+    stop("shape must be a symmetric matrix")
+
+  angles <- (0:segments) * 2 * pi/segments
+  unit.circle <- cbind(cos(angles), sin(angles))
+  Q <- chol(shape, pivot = TRUE)
+  order <- order(attr(Q, "pivot"))
+  ellipse <- t(center + radius * t(unit.circle %*% Q[, order]))
+
+  colnames(ellipse) <- c("x", "y")
+  return(ellipse)
+}
+
 
 

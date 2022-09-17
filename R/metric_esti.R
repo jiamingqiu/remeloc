@@ -10,7 +10,7 @@ idx_glm_optns <- function(optns){
   # by dropping what our method uses.
   res <- which(!(names(optns) %in% c(
     # computation related
-    'n.local', 'method.trim', 'local.reach',
+    'n.local', 'method.trim', 'local.reach', 'proj.pd',
 
     # model related
     'intercept', 'type', 'deriv', 'wt.fn',
@@ -39,6 +39,7 @@ idx_glm_optns <- function(optns){
 #'        whether to include higher order derivatives in local regression.
 #'        \code{0} means metric only, \code{1} also estimates the Christoffel
 #'        symbol, \code{2} further adds the Riemann (0,4)-curvature.
+#'        Currently \code{2} is only ad hoc, one should not use its estimate.
 #'    }
 #'    \item{\code{method.trim}}{
 #'        \code{"proximity"}(default)/\code{"random"}, method to select local
@@ -56,10 +57,16 @@ idx_glm_optns <- function(optns){
 #'        estimated local metric tensor (and curvature if requested) per target
 #'        point, or to also include additional results, such as local
 #'        observations, fits, and options.
+#'    }
 #'    \item{\code{summary.fit}}{
 #'        a function applied to \code{stats::glm} or \code{stats::lm} results
 #'        so the returned object would be smaller. Default to \code{NULL},
 #'        i.e., no summary.
+#'    }
+#'    \item{\code{proj.pd}}{
+#'        \code{FALSE}(default)/\code{TRUE}
+#'        whether to project the estimated metric tensor to positive definite.
+#'        Projection via truncate negative eigenvalues.
 #'    }
 #' }
 #'
@@ -102,6 +109,11 @@ set_optns <- function(optns = list(), ...){
 
   if(!is.null(optns$summary.fit))
     stopifnot(inherits(optns$summary.fit, 'function'))
+
+  if(!is.null(optns$proj.pd))
+    stopifnot(inherits(optns$proj.pd, 'logical'))
+  else
+    optns$proj.pd <- FALSE
 
   return(optns)
 
@@ -409,7 +421,10 @@ fitMetric <- function(formula, data, coord, optns = list()){
   # local(envir = env.dev, {browser();QWER})
   # # END DEV
 
-  stopifnot(all(is.finite(as.matrix(data))))
+  stopifnot(all(is.finite(
+    # as.matrix(data)
+    as.matrix(get_all_vars(formula, data))
+  )))
 
   char.form <- deparse(formula)
   char.form <- stringr::str_remove_all(char.form, '\\s')
@@ -527,10 +542,10 @@ fitMetric <- function(formula, data, coord, optns = list()){
   ls.coord.diff <- lapply(seq(ncol(resp) %/% 2), function(idx.edge.set) {
     # browser();QWER
     # the ith pair
-    mat.edge <- resp[, 1 + seq(2) + 2 * (idx.edge.set - 1)]
+    mat.edge <- resp[, 1 + seq(2) + 2 * (idx.edge.set - 1), drop = F]
     if(length(unique(mat.edge[, 1])) > length(unique(mat.edge[, 2]))){
       # switch index columns to put the least varying first
-      mat.edge <- mat.edge[, c(2, 1)]
+      mat.edge <- mat.edge[, c(2, 1), drop = F]
     }
     tm <- list(
       mat.edge,
@@ -748,18 +763,18 @@ estiMetric <- function(target, model, resp, obsv.coord, optns = list()){
       (nrow(model$coord) / 1000)
   }
   # constructor for model matrix of terms
-  if(is.null(optns$constructor)){
+  if(is.null(optns$constructor))
     optns$constructor <- list(metric = termMetric(d = d))
-    if(optns$deriv >= 1)
-      optns$constructor$pre.christ <- termPreChrist(d = d)
-    if(optns$deriv >= 2)
-      optns$constructor$curvature <- termRiemCvt(d = d) #TBD
-  }else{
-    # in case optns$deriv is altered, also make sure order
-    optns$constructor <- optns$constructor[
-      c('metric', 'pre.christ', 'curvature')[seq(optns$deriv + 1)]
-    ]
-  }
+  if(optns$deriv >= 1 & is.null(optns$constructor$pre.christ))
+    optns$constructor$pre.christ <- termPreChrist(d = d)
+  if(optns$deriv >= 2 & is.null(optns$constructor$curvature))
+    optns$constructor$curvature <- termRiemCvt(d = d) #TBD
+  # }else{
+  #   # in case optns$deriv is altered, also make sure order
+  #   optns$constructor <- optns$constructor[
+  #     c('metric', 'pre.christ', 'curvature')[seq(optns$deriv + 1)]
+  #   ]
+  # }
 
   # # those have been checked in fitMetric
   # optns <- set_optns(optns)
@@ -831,12 +846,13 @@ estiMetric <- function(target, model, resp, obsv.coord, optns = list()){
       res <- sort(res) # now by smaller indices to larger ones
       return(res)
     }, nbhd = target.nbhd, prox = proximity, SIMPLIFY = FALSE)
-  }else{
-    target.nbhd <- lapply(target.nbhd, function(x) {
-      res <- sample(x, size = min(length(x), max.n.local), replace = F)
-      return(sort(res))
-    })
   }
+  # }else{ # if slice here, sample per endpoint, not good
+  #   target.nbhd <- lapply(target.nbhd, function(x) {
+  #     res <- sample(x, size = min(length(x), max.n.local), replace = F)
+  #     return(sort(res))
+  #   })
+  # }
 
   # # recompute the diff in coord to the target points w/ working subset
   # cd.target <- lapply(seq_along(target.nbhd), function(idx.target){
@@ -855,6 +871,12 @@ estiMetric <- function(target, model, resp, obsv.coord, optns = list()){
     nm.edge.idx <- stringr::str_subset(names(df.graph), 'p\\d+e\\d+')
     for(nm in nm.edge.idx){
       loc.graph <- loc.graph[loc.graph[[nm]] %in% nbhd, , drop = F]
+    }
+
+    # random slicing (per unit now)
+    if(nrow(loc.graph) > max.n.local & optns$method.trim == 'random'){
+      idx.use <- sort(sample.int(n = nrow(loc.graph), size = max.n.local))
+      loc.graph <- loc.graph[idx.use, , drop = F]
     }
 
     return(loc.graph)
@@ -892,7 +914,7 @@ estiMetric <- function(target, model, resp, obsv.coord, optns = list()){
   #   n.loc.obsv <- unlist(sapply(loc.obsv, nrow))
   if(!all(n.loc.obsv >= min.n.local)) {
     warning(sprintf(
-      'samples are not dense enough near %s target points.',
+      'samples are not dense enough near %s target point(s).',
       sum(n.loc.obsv < min.n.local)
     ))
   }
@@ -909,11 +931,17 @@ estiMetric <- function(target, model, resp, obsv.coord, optns = list()){
   # })
   # names(cd.target) <- names(target.nbhd)
 
+  # browser();QWER
+
   if(optns$deriv == 0){
     # metric only, no cd0, cd1 necessary
 
     res.locMetric <- mapply(
-      function(obsv){#, tgt, i.tgt){
+      function(obsv, i.tgt){#, tgt, i.tgt){
+
+        if(n.loc.obsv[i.tgt] < min.n.local)
+          return(list(NULL, error = simpleError('insufficient data')))
+
         ls.args <- list(y = obsv[['resp']], optns = optns)
 
         if(optns$type == 'compare'){
@@ -946,18 +974,29 @@ estiMetric <- function(target, model, resp, obsv.coord, optns = list()){
           #   })
         }
 
-        return(do.call(locMetric, ls.args))
+        # return(do.call(locMetric, ls.args))
+        return(
+          tryCatch(
+            do.call(locMetric, ls.args)
+            , error = function(e) list(NULL, error = e)
+          )
+        )
 
       },
       obsv = loc.obsv
-      # , tgt = asplit(target, 1), i.tgt = seq(nrow(target))
+      # , tgt = asplit(target, 1)
+      , i.tgt = seq(nrow(target))
       , SIMPLIFY = F
     )
 
   }else{
 
     res.locMetric <- mapply(
-      function(obsv, tgt){#, i.tgt){
+      function(obsv, tgt, i.tgt){
+
+        if(n.loc.obsv[i.tgt] < min.n.local)
+          return(list(NULL, error = simpleError('insufficient data')))
+
         ls.args <- list(y = obsv[['resp']], optns = optns)
 
         if(optns$type == 'compare'){
@@ -997,11 +1036,16 @@ estiMetric <- function(target, model, resp, obsv.coord, optns = list()){
 
         }
 
-        return(do.call(locMetric, ls.args))
+        return(
+          tryCatch(
+            do.call(locMetric, ls.args)
+            , error = function(e) list(NULL, error = e)
+          )
+        )
 
       },
       obsv = loc.obsv, tgt = asplit(target, 1)
-      #, i.tgt = seq(nrow(target))
+      , i.tgt = seq(nrow(target))
       , SIMPLIFY = F
     )
 
@@ -1022,6 +1066,7 @@ estiMetric <- function(target, model, resp, obsv.coord, optns = list()){
     loc.res$obsv <- loc.obsv
     loc.res$optns <- optns
     loc.res$fit <- lapply(res.locMetric, `[[`, 'loc.fit')
+    loc.res$error <- lapply(res.locMetric, `[[`, 'error')
   }
 
   if(length(loc.res) == 1) # if only metric tensor is requested
@@ -1208,11 +1253,12 @@ estiMetric <- function(target, model, resp, obsv.coord, optns = list()){
 #'     estimated metric tensor as ncol(coord.diff) X ncol(coord.diff) matrix.
 #'    }
 #'   \item{\code{christ}}{
-#'     estimated (1, 2)-tensor of Christoffel symbol, indexed as
+#'     estimated (1, 2)-tensor of Christoffel symbol, if requested. Indexed as
 #'     \code{christ[i, j, k] = }\eqn{\Gamma_{ij}^k}.
 #'    }
 #'   \item{\code{curvature}}{
-#'     estimated (0, 4)-curvature tensor
+#'     estimated (0, 4)-curvature tensor if requested. Indexed as
+#'     \code{curvature[i, j, k, l] = }\eqn{R_{ijkl}}.
 #'    }
 #'   \item{\code{intercept}}{
 #'     estimated intercept, if requested
@@ -1236,7 +1282,7 @@ estiMetric <- function(target, model, resp, obsv.coord, optns = list()){
 #' If comparing edges, then \code{ls.cd} should be a nested list of 2 such
 #' lists.
 #' In addition, the \code{cd0} and \code{cd1} elements should be the coordinates
-#' of either endpoint subtract by the coordinate of the target point, while
+#' of either endpoint subtracted by the coordinate of the target point, while
 #' \code{cd.cd} is merely \code{cd0 - cd1}, essentially the difference of
 #' coordinates of the two endpoints. If only metric is requested, it suffices to
 #' provide \code{cd.cd}, otherwise when estimating additional tensor such as the
@@ -1265,7 +1311,7 @@ estiMetric <- function(target, model, resp, obsv.coord, optns = list()){
 #'        \code{type = c("thresholding", "compare")}.
 #'    }
 #' }
-#' One can also use \code{\link{guess_model}} to set those options.
+#' One can also use \code{\link{set_optns}} to set those options.
 #'
 #' @export
 #'
@@ -1301,6 +1347,12 @@ locMetric <- function(y, ls.cd, optns = list()){
   cnstr <- cnstr[!vapply(cnstr, is.null, TRUE)]
   stopifnot(!is.null(cnstr$metric))
 
+  # potential weights
+  if(!is.null(optns$wt.fn))
+    arr.wt <- optns$wt.fn(ls.cd)
+  else
+    arr.wt <- NULL
+
   # sanity and design matrix
   if(optns$type != "compare"){
 
@@ -1333,12 +1385,12 @@ locMetric <- function(y, ls.cd, optns = list()){
     ls.mdl.mat <- lapply(cnstr, function(x) do.call(x$modelMat, ls.cd))
     mat.design <- do.call(cbind, ls.mdl.mat)
 
-    # possible weighting
-    if(!is.null(optns$wt.fn)){
-      arr.wt <- od.call(optns$wt.fn, ls.cd)
-    }else{
-      arr.wt <- NULL
-    }
+    # # possible weighting
+    # if(!is.null(optns$wt.fn)){
+    #   arr.wt <- do.call(optns$wt.fn, ls.cd)
+    # }else{
+    #   arr.wt <- NULL
+    # }
 
   }else{
 
@@ -1377,13 +1429,13 @@ locMetric <- function(y, ls.cd, optns = list()){
     })
     mat.design <- do.call(cbind, ls.mdl.mat)
 
-    # possible weighting
-    if(!is.null(optns$wt.fn)){
-      arr.wt <-
-        do.call(optns$wt.fn, ls.cd[[1]]) * d0.call(optns$wt.fn, ls.cd[[2]])
-    }else{
-      arr.wt <- NULL
-    }
+    # # possible weighting
+    # if(!is.null(optns$wt.fn)){
+    #   arr.wt <-
+    #     do.call(optns$wt.fn, ls.cd[[1]]) * do.call(optns$wt.fn, ls.cd[[2]])
+    # }else{
+    #   arr.wt <- NULL
+    # }
 
   }
 
@@ -1391,7 +1443,10 @@ locMetric <- function(y, ls.cd, optns = list()){
 
   if(optns$intercept == TRUE){
     # add intercept if asked to
-    mat.design <- cbind(rep(1, nrow(mat.design)), mat.design)
+    mat.design <- cbind(
+      data.frame(intercept = rep(1, nrow(mat.design))),
+      mat.design
+    )
   }
 
   loc.dat <- data.frame(y, mat.design)
@@ -1401,13 +1456,22 @@ locMetric <- function(y, ls.cd, optns = list()){
   }else{
     use.fn <- 'stats::lm'
   }
-  loc.fit <- do.call(eval(parse(text = use.fn)), c(
-    list(formula = y ~ 0 + ., data = quote(loc.dat), weights = quote(arr.wt)),
-    optns[idx.optns.glm]
-  ))
-  vec.par <- loc.fit$coefficients
-  # call takes too much space, drop
-  loc.fit$call <- NULL
+  loc.fit <- #tryCatch(
+    do.call(eval(parse(text = use.fn)), c(
+      list(formula = y ~ 0 + ., data = quote(loc.dat), weights = quote(arr.wt)),
+      optns[idx.optns.glm]
+    ))#,
+  #   error = function(e) return(NULL)
+  # )
+  # if(is.null(loc.fit)){
+  #   loc.fit <- list(NULL)
+  #   vec.par <- rep(NA, ncol(loc.dat))
+  # }else{
+    vec.par <- loc.fit$coefficients
+    # call takes too much space, drop
+    loc.fit$call <- NULL
+  # }
+
 
   if(optns$intercept == TRUE){
     itcpt <- vec.par[1]
@@ -1419,6 +1483,11 @@ locMetric <- function(y, ls.cd, optns = list()){
   idx.par <- rep(names(cnstr), sapply(cnstr, function(x) nrow(x$df.idx)))
   res <- list()
   res$metric <- with(cnstr$metric, vec2tsr(vec.par[idx.par == 'metric']))
+
+  if(!is.null(optns$proj.pd)){
+    if(optns$proj.pd) res$metric <- mat2PD(res$metric)
+  }
+
   if(!is.null(cnstr$pre.christ)){
     arr.pre.christ <-
       with(cnstr$pre.christ, vec2tsr(vec.par[idx.par == 'pre.christ']))
@@ -1435,6 +1504,8 @@ locMetric <- function(y, ls.cd, optns = list()){
   # summary to reduce size if requested
   if(!is.null(optns$summary.fit))
     loc.fit <- eval(parse(text = 'optns$summary.fit(loc.fit)'))
+  if(optns$tensor.only)
+    loc.fit <- NULL
   res$loc.fit <- loc.fit
 
   res$optns <- optns

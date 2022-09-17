@@ -1,5 +1,64 @@
 # utilities
 
+# do.call.tommy <- function(what, args, ...) {
+#   # credit to Tommy at
+#   # https://stackoverflow.com/questions/10022436/do-call-in-combination-with
+#   if(is.character(what)){
+#     fn <- strsplit(what, "::")[[1]]
+#     what <- if(length(fn)==1) {
+#       get(fn[[1]], envir=parent.frame(), mode="function")
+#     } else {
+#       get(fn[[2]], envir=asNamespace(fn[[1]]), mode="function")
+#     }
+#   }
+#
+#   do.call(what, as.list(args), ...)
+# }
+# do.call.jeroen <- function(what, args, ...){
+#
+#   # credit to Jeroen at
+#   # https://stackoverflow.com/questions/10022436/do-call-in-combination-with
+#
+#   if(is.function(what)){
+#     what <- deparse(as.list(match.call())$what);
+#   }
+#   myfuncall <- parse(text=what)[[1]];
+#   mycall <- as.call(c(list(myfuncall), args));
+#   eval(mycall, ...);
+# }
+
+relFrob <- function(esti, true, eps = .Machine$double.eps^(1/3)){
+  # relative Frobenius error
+  frob.true <- sqrt(sum(true ^ 2))
+  frob.err <- sqrt(sum( (esti - true) ^ 2 ))
+  if(frob.true < eps)
+    return(frob.err)
+  else
+    return(frob.err / frob.true)
+}
+
+# combination number encode/decoder
+comb2_vec2idx <- function(vec, n){
+  # vec-th combination to the actual combination (i, j)
+  lookup <- c(0L, cumsum(rev(seq(n - 1))))
+  res <- matrix(0L, ncol = length(vec), nrow = 2)
+  res[1, ] <- sapply(vec, function(x) max(which(x > lookup)) )
+  res[2, ] <- vec - lookup[res[1, ]]
+  res[2, ] <- (seq(n))[res[2, ] + res[1, ]]
+  return(res)
+}
+comb2_idx2vec <- function(idx, n){
+  # order of combination (i, j) in combn(n, 2) without invoking combn
+  # (n - 1) + (n - 2) + ... + (n - i + 1) + j - i
+  if(!is.matrix(idx)) idx <- as.matrix(idx)
+  stopifnot(nrow(idx) == 2)
+  stopifnot(min(idx) == 1 & max(idx) == n)
+  return(
+    ((2L * n - idx[1, ]) * (idx[1, ] - 1L)) / 2L + idx[2, ] - idx[1, ]
+  )
+}
+
+
 #' Reindex array
 #'
 #' @description Rearrange array so that \code{x_out[to] == x_in[from]}.

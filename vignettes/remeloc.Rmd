@@ -125,7 +125,7 @@ $\{x: (x - p)^T G(p) (x - p) = c\}$ for given center point $p$ and metric tensor
 
 ```{r, fig.width=4, fig.height=4}
 colnames(target) <- c('x1', 'x2')
-df.ell <- getMetricEllipsoid(target, esti.metric, radius = 0.2) %>% 
+df.ell <- getMetricEllipsoid(target, esti.metric, radius = 0.2, tissot = T) %>% 
   mutate(what = 'esti') %>% bind_rows(getMetricEllipsoid(
     target, apply(target, 1, manifold$metric, simplify = F), radius = 0.2
   ) %>% mutate(what = 'true')) %>% 
@@ -148,25 +148,27 @@ map.ell
 ```
 
 Next, consider the geodesic curve. 
-However, the current estimate is locally constant with zero derivatives, which means one cannot plug the "estiMetric" directly into "getGeodesic" function, additional interpolation step is needed. 
+However, the current estimated metric cannot be used for numeric differential so as to obtain Christoffel symbol, as it is almost locally constant. This means one cannot plug the "estiMetric" directly into "getGeodesic" function, but must use the christ argument, which can be rather slow; or to use additional post-smoothing, at a cost of accuracy.
 Currently the "approxfunMetric" uses local polynomial to provide a smoothed estimated tensor. However, it is not interpolation, be careful when using it.
 
 ```{r fig.width=6.5, fig.height=4}
-approx.metric <- approxfunMetric(target, esti.metric)
+suppressWarnings({approx.metric <- approxfunMetric(
+  target, esti.metric, bw = 5 * max(abs(target[1, ] - target[2, ])),
+  optns = list(maxk = 1000)
+)})
 geo.f.true <- getGeodesic(manifold$metric, d = d)
-geo.f.esti <- getGeodesic(function(x){estiMetric(x, fit, optns = list(
-  # even a larger bandwidth cannot help
-  local.reach = 0.25
-))[[1]]}, d = d)
+geo.f.esti <- getGeodesic(christ = function(x){estiMetric(x, fit, optns = list(
+  local.reach = 0.25, deriv = 1
+))$christ[[1]]}, d = d)
 geo.f.approx <- getGeodesic(approx.metric, d = d)
-df.geo <- bind_rows(
+system.time({df.geo <- bind_rows(
   geo.f.true(rep(0.75, d), c(-1, 0)) %>% as.data.frame %>% as_tibble %>%
     mutate(what = 'true'),
-  geo.f.esti(rep(0.75, d), c(-1, 0)) %>% as.data.frame %>% as_tibble %>% 
-    mutate(what = 'estimated'),
+  geo.f.esti(rep(0.75, d), c(-1, 0), rtol = 1e-4) %>% #200s if rtol = 1e-6
+    as.data.frame %>% as_tibble %>% mutate(what = 'estimated'),
   geo.f.approx(rep(0.75, d), c(-1, 0)) %>% as.data.frame %>% as_tibble %>% 
-    mutate(what = 'approx')
-)
+    mutate(what = 'post-smoothing')
+)})
 df.geo %>% ggplot() +
   geom_path(aes(x = x1, y = x2, color = what)) +
   coord_fixed()

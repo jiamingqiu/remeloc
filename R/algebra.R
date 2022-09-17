@@ -1,3 +1,24 @@
+
+mat2PD <- function(mat){
+  # truncate a symmetric matrix to be non-negative definite
+  stopifnot(isSymmetric(mat))
+  eig <- eigen(mat, symmetric = T)
+  if(all(eig$values >= .Machine$double.eps^(1/3)))
+    return(mat)
+
+  eig$values[eig$values < .Machine$double.eps^(1/3)] <-
+    .Machine$double.eps^(1/3)
+
+  return(
+    tcrossprod(
+      tcrossprod(eig$vectors, diag(eig$values)),
+      eig$vectors
+    )
+  )
+}
+
+
+
 ##### Model terms related ######################################################
 
 termMetric <- function(d, method = 'adhoc'){
@@ -16,7 +37,7 @@ termMetric <- function(d, method = 'adhoc'){
     df.idx$off.diag[seq(d)] <- F
     df.idx$subscript <- base::Reduce(
       function(x, y) sprintf('%s,%s', x, y),
-      x = df.idx[, sprintf('i%s', seq(2))]
+      x = df.idx[, sprintf('i%s', seq(2)), drop = F]
     )
 
     # # basis for the vectorization
@@ -27,8 +48,8 @@ termMetric <- function(d, method = 'adhoc'){
     # model matrix constructor
     modelMat <- function(cd.cd, cd0, cd1) {
       if(missing(cd.cd)) cd.cd <- cd0 - cd1
-      mat <- cd.cd[, df.idx$i1] * cd.cd[, df.idx$i2]
-      mat[, -seq(d)] <- 2 * mat[, -seq(d)]
+      mat <- cd.cd[, df.idx$i1, drop = F] * cd.cd[, df.idx$i2, drop = F]
+      mat[, -seq(d)] <- 2 * mat[, -seq(d), drop = F]
       colnames(mat) <- sprintf('metric.%s', seq(ncol(mat)))
       return(mat)
     }
@@ -118,9 +139,12 @@ termPreChrist <- function(d, method = 'adhoc'){
     modelMat <- function(cd.cd, cd0, cd1) {
       if(missing(cd.cd)) cd.cd <- cd0 - cd1
       mat <- with(df.idx, {
-        cd.cd[, i3] * (cd0[, i1] * cd0[, i2] - cd1[, i1] * cd1[, i2])
+        cd.cd[, i3, drop = F] * (
+          cd0[, i1, drop = F] * cd0[, i2, drop = F] -
+            cd1[, i1, drop = F] * cd1[, i2, drop = F]
+        )
       })
-      mat[, df.idx$off.diag] <- 2 * mat[, df.idx$off.diag]
+      mat[, df.idx$off.diag] <- 2 * mat[, df.idx$off.diag, drop = F]
       colnames(mat) <- sprintf('pre.christ.%s', seq(ncol(mat)))
       return(mat)
     }

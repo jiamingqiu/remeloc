@@ -5,7 +5,7 @@ test_that('options and model guessing', {
   expect_setequal(
     names(guess_model()), c(
       'method.trim', 'n.local', 'tensor.only', 'type', 'intercept',
-      'deriv'
+      'deriv', 'proj.pd'
     )
   )
   expect_identical(set_optns(method.trim = 'random')$method.trim, 'random')

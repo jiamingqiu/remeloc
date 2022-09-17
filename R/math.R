@@ -477,9 +477,11 @@ getGeodesic <- function(metric, christ, d){
   }
 
 
-  res.f <- function(start.pnt, init.v, t = seq(0, 1, by = 0.01)){
+  res.f <- function(start.pnt, init.v, t = seq(0, 1, by = 0.01), ...){
 
     # geodesic curve from start w/ initial velocity, given grid of time
+    # ...: additional arguments past to deSolve::ode
+
     stopifnot(length(start.pnt) == length(init.v))
     stopifnot(length(start.pnt) == d)
     stopifnot(all(diff(t) > 0))
@@ -487,7 +489,7 @@ getGeodesic <- function(metric, christ, d){
 
     ode.res <- deSolve::ode(
       c(start.pnt, init.v),
-      times = t, func = geo.eq
+      times = t, func = geo.eq, ...
     )
     colnames(ode.res) <-
       c('time', sprintf('x%s', seq(d)), sprintf('v%s', seq(d)))
