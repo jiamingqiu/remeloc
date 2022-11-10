@@ -74,7 +74,7 @@ test_that("Riemann curvature tensors", {
   # tst.christ - christ.f(target)
 })
 
-test_that('geodesic', {
+test_that('geodesic curve in Euclidean space', {
 
   d <- 2
   manifold <- spaceEuclidean(d)
@@ -85,5 +85,82 @@ test_that('geodesic', {
   expect_identical(geo.curve[, 'v1'], rep(1, nrow(geo.curve)))
   expect_identical(geo.curve[, 'v2'], rep(1, nrow(geo.curve)))
 
+  # if we get straight line
+  p1 <- rep(1, d)
+  p2 <- rep(-1, d)
+  expect_equal(
+    `dimnames<-`(geo.f(start.pnt = p1, end.pnt = p2)[, c('x1', 'x2')], NULL),
+    eucLine(p1, p2)
+  )
+
 })
+
+test_that('Numeric stability of geodesic distance solver: sphere', {
+
+  d <- 2
+
+  for(mdl in c('stereo', 'polar')) {
+    manifold <- spaceSphere(d = d)
+    geo.f <- getGeodesic(manifold$metric, d = d)
+    geo.dist <- getGeoDist(manifold$metric, d = d)
+
+    set.seed(1)
+    mat.p1 <- manifold$genPnt(20)
+    mat.p2 <- manifold$genPnt(20)
+    # check geodesic distance
+    dist.true <- manifold$dist(mat.p1, mat.p2)
+    dist.numeric <- mapply(
+      geo.dist,
+      start.pnt = asplit(mat.p1, 1),
+      end.pnt = asplit(mat.p2, 1),
+      MoreArgs = list(
+        t = seq(0, 5, length.out = 100), nmax = 5e+3, atol = 1e-6
+        , xguess = NULL, yguess = NULL
+      )
+    )
+    # thoes go the other way on the great circle
+    idx.another.side <- abs(dist.numeric - dist.true) > 1e-5
+    expect_equal(
+      dist.numeric[!idx.another.side],
+      dist.true[!idx.another.side]
+      # , tolerance = 0.5
+    )
+    expect_equal(
+      (dist.numeric + dist.true)[idx.another.side],
+      rep(2 * pi, sum(idx.another.side))
+    )
+  }
+
+})
+
+
+test_that('Numeric stability of geodesic distance solver: hyperbolic', {
+
+  # this could take a while
+
+  d <- 2
+  for(mdl in c('ball', 'half')) {
+    manifold <- spaceHyperbolic(d = d, model = mdl)
+    geo.f <- getGeodesic(manifold$metric, d = d)
+    geo.dist <- getGeoDist(manifold$metric, d = d)
+
+    set.seed(1)
+    mat.p1 <- manifold$genPnt(20)
+    mat.p2 <- manifold$genPnt(20)
+    # check geodesic distance
+    dist.true <- manifold$dist(mat.p1, mat.p2)
+    dist.numeric <- mapply(
+      geo.dist,
+      start.pnt = asplit(mat.p1, 1),
+      end.pnt = asplit(mat.p2, 1),
+      MoreArgs = list(
+        t = seq(0, 5, length.out = 100), nmax = 5e+3, atol = 1e-4
+        # , xguess = NULL, yguess = NULL
+      )
+    )
+    expect_equal(dist.numeric, dist.true)
+  }
+
+})
+
 

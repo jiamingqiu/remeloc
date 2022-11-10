@@ -436,28 +436,134 @@ locDist <- function(coord, dist, local.reach){
 
 }
 
+eucLine <- function(p1, p2, t = seq(0, 1, by = 0.01)) {
+  # straight line in Euclidean space
+  # from p1 to p2 on grid t
+  # output in the form of matrix w/ 1 row corr. to 1 time grid.
+  d <- length(p1)
+  stopifnot(length(p2) == d)
+
+  res <- sapply(seq(d), function(idx.d) {
+    approx(
+      x = range(t),
+      y = c(p1[idx.d], p2[idx.d]),
+      xout = t
+    )$y
+  })
+  return(res)
+}
+
 ##### Riemannian geometry related functions ####################################
+
+#' Compute geodesic distance
+#'
+#' @param metric metric function
+#' @param christ Christoffel symbol (optional)
+#' @param d dimension
+#'
+#' @return a function computing geodesic distance
+#' @export
+#'
+#' @details
+#' \code{metric} must be provided, \code{christ} is optional.
+#' The resulting function takes start point \code{start.pnt},
+#' end point \code{end.pnt},
+#' and an array of time \code{t} (to control integration precision),
+#' then computes geodesic distance between the two points.
+#' This is a convenience wrapper over \code{\link{getGeodesic}}.
+#'
+#' @examples
+#' manifold <- spaceHyperbolic(d = 2, model = 'half')
+#' # manifold <- spaceSphere(d = 2)
+#' geo.f <- getGeodesic(manifold$metric, d = 2)
+#' # solve for geodesic curve from c(0.5, 0.5) to c(1, 0.1)
+#' p1 <- c(0.5, 0.5); p2 <- c(1, 0.1)
+#' geo <- geo.f(p1, end.pnt = p2)
+#' plot(x = geo[, 'x1'], y = geo[, 'x2'], type = 'l', asp = 1)
+#' geo.dist <- getGeoDist(manifold$metric, d = 2)
+#' geo.dist(p1, p2)
+#' manifold$dist(p1, p2)
+getGeoDist <- function(metric, christ, d){
+
+  stopifnot(!missing(metric))
+
+  geo.curve.f <- getGeodesic(metric, christ, d)
+
+  res <- function(start.pnt, end.pnt, t = seq(0, 1, by = 0.01), ...) {
+    # geodesic curve from start and end.pnt,
+    # t: time grid
+    # ...: additional arguments past to bvpSolve::bvptwp
+    # return: geodesic distance
+
+    geo.curve <- geo.curve.f(
+      start.pnt = start.pnt, end.pnt = end.pnt, t = t, ...
+    )
+    norm.v <- apply(geo.curve, 1, function(x){
+      v <- x[1 + d + seq(d)]
+      x <- x[1 + seq(d)]
+      met <- metric(x)
+      res <- sum(v * t(v * met)) # quadratic form
+      return(sqrt(res))
+    })
+    time <- geo.curve[, 1]
+    return(
+      sum(
+        norm.v * (c(0, diff(time)) + c(diff(time), 0)) / 2
+      )
+    )
+  }
+
+  return(res)
+
+}
 
 #' Compute geodesic curve
 #'
 #' @param metric metric function
+#' @param christ Christoffel symbol
 #' @param d dimension
 #'
-#' @return a function
+#' @return a function compute geodesic curve.
 #'
 #' @export
 #'
-#' @details The resulting function takes start point \code{start.pnt},
-#' initial velocity \code{init.v}, an array of time \code{t},
-#' then computes geodesic curve and return in a \code{1 + 2 * d}-col matrix,
+#' @details
+#' It suffices to supply either one of \code{metric} or \code{christ}.
+#'
+#'
+#' The resulting function takes start point \code{start.pnt},
+#' initial velocity \code{init.v}, end point \code{end.pnt},
+#' an array of time \code{t}, and some additional argument \code{...} for
+#' the ODE solver.
+#' It then computes geodesic curve and return in a \code{1 + 2 * d}-col matrix,
 #' where the columns are time, the curve, and the velocity.
+#' Only one of \code{init.v} and \code{end.pnt} should be supplied, otherwise
+#' \code{init.v} will be ignored with a warning.
+#' The geodesic curve is computed via solving the ODE of geodesic equations,
+#' when \code{end.pnt} is provided, this is a boundary value problem solved
+#' using \code{\link{bvpSolve::bvpcol}}. Otherwise with \code{init.v} this is
+#' an initial value problem solved using \code{\link{deSolve::ode}}.
+#' Additional argument can be passed to the corresponding solver in \code{...}.
 #'
 #' @examples
 #' manifold <- spaceHyperbolic(d = 2, model = 'half')
 #' geo.f <- getGeodesic(manifold$metric, d = 2)
-#' # solve for geodesic curve from c(0.5, 0.5) w/ initial velocity c(1, 0)
-#' geo <- geo.f(c(0.5, 0.5), c(1, 0))
-#' plot(x = geo[, 'x1'], y = geo[, 'x2'], type = 'l')
+#' p1 <- c(0.5, 0.5); p2 <- c(1, 1e-3)
+#' # geodesic curve from c(0.5, 0.5) w/ initial velocity c(1, 0)
+#' geo <- geo.f(p1, c(1, 0))
+#' plot(
+#'   x = geo[, 'x1'], y = geo[, 'x2'], type = 'l',
+#'   asp = 1, ylim = c(0, 0.55), lwd = 5
+#' )
+#' # geodesic curve from c(0.5, 0.5) to c(1, 0.1)
+#' geo.se <- geo.f(p1, end.pnt = p2, atol = 1e-4, nmax = 5e+3)
+#' points(x = geo.se[, 'x1'], y = geo.se[, 'x2'], type = 'l', col = 'red')
+#' geo.vert <- geo.f(p1, end.pnt = p1 + c(0, -0.25))
+#' points(x = geo.vert[, 'x1'], y = geo.vert[, 'x2'], type = 'l', col = 'blue')
+#' # remark: geodesic curves between 2 points on 2-dim half-space model for
+#' # hyperbolic space is a straight line if two points have same x coordinates,
+#' # or the segment of half-circle connecting the two points whose center is on
+#' # the line of y = 0.
 getGeodesic <- function(metric, christ, d){
   # get a function computes geodesic
 
@@ -477,20 +583,64 @@ getGeodesic <- function(metric, christ, d){
   }
 
 
-  res.f <- function(start.pnt, init.v, t = seq(0, 1, by = 0.01), ...){
+  res.f <- function(start.pnt, init.v, end.pnt, t = seq(0, 1, by = 0.01), ...){
 
-    # geodesic curve from start w/ initial velocity, given grid of time
-    # ...: additional arguments past to deSolve::ode
+    # geodesic curve from start w/ initial velocity, given grid of time (t)
+    # or specified by start.pnt and end.pnt, in which case init.v is ignored
+    # ...: additional arguments past to deSolve::ode or bvpSolve::bvpcol
+    # returns the result of deSolve::ode or bvpSolve::bvptwp
 
-    stopifnot(length(start.pnt) == length(init.v))
     stopifnot(length(start.pnt) == d)
     stopifnot(all(diff(t) > 0))
     stopifnot(all(t >= 0))
 
-    ode.res <- deSolve::ode(
-      c(start.pnt, init.v),
-      times = t, func = geo.eq, ...
-    )
+    if(missing(end.pnt)){
+
+      # shooting initial velocity
+
+      stopifnot(length(start.pnt) == length(init.v))
+
+      ode.res <- deSolve::ode(
+        c(start.pnt, init.v),
+        times = t, func = geo.eq, ...
+      )
+
+    }else{
+
+      # boundary value problem: start and end points
+
+      stopifnot(length(start.pnt) == length(end.pnt))
+      if(!missing(init.v))
+        warning('init.v ignored when end.pnt supplied.')
+      # browser()
+      # supply xguess and yguess mostly for stability of numeric solver
+      # here, a straight line (Euclidean sense) is use as init guess.
+      ls.args <- as.list(match.call())[-1]
+      if(!
+         ('xguess' %in% names(ls.args) & 'yguess' %in% names(ls.args))
+      ) {
+        xguess <- t
+        yguess <- matrix(0, ncol = 2 * d, nrow = length(xguess))
+        yguess[, seq(d)] <- eucLine(start.pnt, end.pnt, t = xguess)
+        yguess <- t(yguess)
+
+        yguess[d + seq(d), ] <- (end.pnt - start.pnt) / diff(range(xguess))
+
+        ode.res <- bvpSolve::bvpcol(
+          yini = c(start.pnt, rep(NA, d)), yend = c(end.pnt, rep(NA, d)),
+          x = t, func = geo.eq, xguess = xguess, yguess = yguess, ...
+        )
+
+      } else {
+        ode.res <- bvpSolve::bvpcol(
+          yini = c(start.pnt, rep(NA, d)), yend = c(end.pnt, rep(NA, d)),
+          x = t, func = geo.eq, ...
+        )
+      }
+
+
+    }
+
     colnames(ode.res) <-
       c('time', sprintf('x%s', seq(d)), sprintf('v%s', seq(d)))
     return(ode.res)
