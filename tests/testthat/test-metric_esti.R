@@ -74,8 +74,11 @@ test_that('Mathematical accuracy of estimated tensors', {
   dat$y <- dat$sqd
 
   fit <- fitMetric(y ~ p1 : p2, data = dat, coord = obsv.coord, optns = list(
-    local.reach = 0.2, deriv = 2, tensor.only = T
+    local.reach = 0.2, tensor.only = T
+    , deriv = 2
+    # , deriv = 0, wt.fn = getGaussWeight(0.01)
   ))
+  # estiMetric(target[1, ], fit)
   # system.time({
     ls.esti <- estiMetric(target, fit)
   # }) # ~ 55s

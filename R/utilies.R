@@ -1,5 +1,20 @@
 # utilities
 
+inConvexPolygon <- function(p, vertex) {
+  # determine if p is inside the convex hull of vertex
+  # p & vertex: 1 row for 1 point
+  # Math unvalidated yet ,use with caution
+
+  stopifnot(is.matrix(vertex))
+  # stopifnot(length(p) == ncol(vertex))
+
+  hull <- geometry::convhulln(vertex)
+  return(
+    geometry::inhulln(hull, p)
+  )
+
+}
+
 # do.call.tommy <- function(what, args, ...) {
 #   # credit to Tommy at
 #   # https://stackoverflow.com/questions/10022436/do-call-in-combination-with

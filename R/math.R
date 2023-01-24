@@ -443,14 +443,22 @@ eucLine <- function(p1, p2, t = seq(0, 1, by = 0.01)) {
   d <- length(p1)
   stopifnot(length(p2) == d)
 
-  res <- sapply(seq(d), function(idx.d) {
+  t.grid <- t
+
+  res <- matrix(0, ncol = 1 + 2 * d, nrow = length(t.grid))
+  res[, 1] <- t.grid
+  res[, 1 + seq(d)] <- sapply(seq(d), function(idx.d) {
     approx(
-      x = range(t),
+      x = range(t.grid),
       y = c(p1[idx.d], p2[idx.d]),
-      xout = t
+      xout = t.grid
     )$y
   })
-  return(res)
+  res <- t(res)
+
+  res[1 + d + seq(d), ] <- (p2 - p1) / diff(range(t.grid))
+
+  return(t(res))
 }
 
 ##### Riemannian geometry related functions ####################################
@@ -498,22 +506,37 @@ getGeoDist <- function(metric, christ, d){
     geo.curve <- geo.curve.f(
       start.pnt = start.pnt, end.pnt = end.pnt, t = t, ...
     )
-    norm.v <- apply(geo.curve, 1, function(x){
-      v <- x[1 + d + seq(d)]
-      x <- x[1 + seq(d)]
-      met <- metric(x)
-      res <- sum(v * t(v * met)) # quadratic form
-      return(sqrt(res))
-    })
-    time <- geo.curve[, 1]
-    return(
-      sum(
-        norm.v * (c(0, diff(time)) + c(diff(time), 0)) / 2
-      )
-    )
+
+    return(geoCurve2Dist(geo.curve, metric))
+
   }
 
   return(res)
+
+}
+
+geoCurve2Dist <- function(geo.curve, metric) {
+
+  # for simplicity
+
+  if(anyNA(geo.curve))
+    return(NA)
+
+  d <- (ncol(geo.curve) - 1) / 2
+
+  norm.v <- apply(geo.curve, 1, function(x){
+    v <- x[1 + d + seq(d)]
+    x <- x[1 + seq(d)]
+    met <- metric(x)
+    res <- sum(v * t(v * met)) # quadratic form
+    return(sqrt(res))
+  })
+  time <- geo.curve[, 1]
+  return(
+    sum(
+      norm.v * (c(0, diff(time)) + c(diff(time), 0)) / 2
+    )
+  )
 
 }
 
@@ -620,11 +643,12 @@ getGeodesic <- function(metric, christ, d){
          ('xguess' %in% names(ls.args) & 'yguess' %in% names(ls.args))
       ) {
         xguess <- t
-        yguess <- matrix(0, ncol = 2 * d, nrow = length(xguess))
-        yguess[, seq(d)] <- eucLine(start.pnt, end.pnt, t = xguess)
-        yguess <- t(yguess)
-
-        yguess[d + seq(d), ] <- (end.pnt - start.pnt) / diff(range(xguess))
+        yguess <- t(eucLine(start.pnt, end.pnt, t = xguess))[-1, ]
+        # yguess <- matrix(0, ncol = 2 * d, nrow = length(xguess))
+        # yguess[, seq(d)] <- eucLine(start.pnt, end.pnt, t = xguess)
+        # yguess <- t(yguess)
+        #
+        # yguess[d + seq(d), ] <- (end.pnt - start.pnt) / diff(range(xguess))
 
         ode.res <- bvpSolve::bvpcol(
           yini = c(start.pnt, rep(NA, d)), yend = c(end.pnt, rep(NA, d)),

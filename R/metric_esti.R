@@ -86,7 +86,8 @@ set_optns <- function(optns = list(), ...){
   optns[names(ls.args)] <- ls.args
 
   ## fill in the defaults
-  if(is.null(optns$deriv)) optns$deriv <- 0L
+  if(is.null(optns$deriv))
+    optns$deriv <- 0L
   stopifnot(optns$deriv %in% seq(0, 2))
 
   # # Riemann curvature? LEGACY
@@ -933,7 +934,7 @@ estiMetric <- function(target, model, resp, obsv.coord, optns = list()){
 
   # browser();QWER
 
-  if(optns$deriv == 0){
+  if(optns$deriv == 0 & is.null(optns$wt.fn)){
     # metric only, no cd0, cd1 necessary
 
     res.locMetric <- mapply(

@@ -90,7 +90,7 @@ test_that('geodesic curve in Euclidean space', {
   p2 <- rep(-1, d)
   expect_equal(
     `dimnames<-`(geo.f(start.pnt = p1, end.pnt = p2)[, c('x1', 'x2')], NULL),
-    eucLine(p1, p2)
+    eucLine(p1, p2)[, 1 + seq(d)]
   )
 
 })

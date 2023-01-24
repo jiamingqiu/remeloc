@@ -1,6 +1,123 @@
 # functions for visualization
 # suggested: tidyverse
 
+approxfunHD <- function(coord, tensor, bw, method = 'smooth') {
+  method <- match.arg(method, c('smooth', 'interp'))
+  if(method == 'smooth') {
+    res <- approxfunSmooth(coord, tensor, bw)
+  } else {
+    res <- approxfun_interp2d(coord, tensor)
+  }
+  return(res)
+}
+
+approxfunSmooth <- function(coord, tensor, bw){
+
+  stopifnot(nrow(coord) > 2)
+
+  if(inherits(tensor, 'function'))
+    ls.tensor <- apply(coord, 1, tensor, simplify = F)
+  else
+    ls.tensor <- tensor
+
+  stopifnot(inherits(ls.tensor, 'list'))
+  stopifnot(length(ls.tensor) == nrow(coord))
+  stopifnot(all(
+    sapply(ls.tensor, function(x) all(dim(x) == dim(ls.tensor[[1]])))
+  ))
+
+  dim.tensor <- dim(ls.tensor[[1]])
+  dd.tensor <- length(ls.tensor[[1]])
+  # 1row = 1pnt in coord
+  mat.org <- t(sapply(ls.tensor, function(x) as.numeric(x)))
+
+  one.row.f <- function(x) {
+
+    # browser()
+    # weighted average to approx inverse, new.emb: new embedded coord
+
+    stopifnot(length(x) == ncol(coord))
+
+    # pseudo Euclidean dist in the embedded space
+    pseudo.dist <- colSums( (t(coord) - x) ^ 2 )
+    # gaussian weighting
+    wt <- dnorm(pseudo.dist, sd = bw)
+    wt <- wt / sum(wt)
+
+    use.org <- mat.org[wt > .Machine$double.eps ^ (1/3), , drop = F]
+    use.wt <- wt[wt > .Machine$double.eps ^ (1/3)]
+    if(length(use.wt) == 0) {
+      return(array(0, dim = dim.tensor))
+    } else {
+      return(
+        array(colSums(use.org * use.wt), dim = dim.tensor)
+      )
+    }
+
+  }
+
+  res.f <- function(target) {
+    if(is.data.frame(target))
+      x <- as.matrix(target)
+    if(!is.matrix(target))
+      target <- matrix(target, nrow = 1)
+
+    if(nrow(target) == 1)
+      one.row.f(as.numeric(target))
+    else
+      apply(target, 1, one.row.f, simplify = F)
+  }
+
+  return(res.f)
+
+}
+
+approxfun_interp2d <- function(coord, tensor) {
+  grid.x <- unique(coord[, 1])
+  grid.y <- unique(coord[, 2])
+  stopifnot(all(diff(grid.x) > 0) & all(diff(grid.y) > 0))
+  stopifnot(identical(
+    `colnames<-`(as.matrix(expand.grid(grid.x, grid.y)), NULL),
+    coord
+  ))
+  if(inherits(tensor, 'function')) {
+    return(
+      approxFun2d(coord, apply(coord, 1, tensor, simplify = F))
+    )
+  }
+
+  ls.tensor <- tensor
+  stopifnot(is.list(ls.tensor))
+  dim.tensor <- dim(ls.tensor[[1]])
+  dd.tensor <- length(ls.tensor[[1]])
+  ls.mat <- lapply(seq(dd.tensor), function(which.element) {
+    arr.val <- sapply(ls.tensor, function(tsr) tsr[which.element])
+    matrix(arr.val, nrow = length(grid.x))
+  })
+  one.row.f <- function(x, ...) {
+    # browser();QWER
+    arr.val <- sapply(seq(dd.tensor), function(which.element) {
+      pracma::interp2(
+        # remark: pracma seems to iterate y(2nd), unlike R iterate x(1st)
+        # see ?pracma::interp2.
+        grid.y, grid.x, ls.mat[[which.element]],
+        xp = x[2], yp = x[1], ...
+      )
+    })
+    return(array(arr.val, dim = dim.tensor))
+  }
+
+  res.f <- function(target, ...) {
+    if(is.data.frame(target))
+      x <- as.matrix(target)
+    if(!is.matrix(target))
+      x <- matrix(target, nrow = 1)
+    apply(target, 1, function(x, ...) one.row.f(x, ...), simplify = F)
+  }
+
+  return(res.f)
+}
+
 approxfunTensor <- function(
     coord, tensor, sym.eq = NULL, bw = NULL, optns.locfit = list()
 ){
@@ -54,7 +171,7 @@ approxfunTensor <- function(
       )),
       data = w.dat
     ), optns.locfit))
-    fit$call <- NULL
+    # fit$call <- NULL
     return(fit)
   })
 
