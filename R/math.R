@@ -218,7 +218,7 @@ spaceHyperbolic <- function(d, r = 1, model = 'ball'){
 #'   the coordinate chart to use
 #'
 #' @return a list
-#' @details For stereographic projection, north pole \eqn{(0, ..., 0, 1} is
+#' @details For stereographic projection, north pole \eqn{(0, ..., 0, 1)} is
 #' excluded, c.f. problem 1-7, Lee (2013), and pp. 58 - 61, Lee (2018).
 #' \cr
 #' For polar coordinate, the embedding of
