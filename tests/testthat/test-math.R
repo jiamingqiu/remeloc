@@ -163,4 +163,54 @@ test_that('Numeric stability of geodesic distance solver: hyperbolic', {
 
 })
 
+test_that('distance function in spheroid', {
+  d <- 2
+  ls.mnfld <- lapply(
+    c('geodetic', 'geocentric', 'parametric'),
+    function(lat) spaceSpheroid(d = 2, a = 2, f = 0.5, latitude = lat)
+  )
+  names(ls.mnfld) <- c('geodetic', 'geocentric', 'parametric')
+  arr.quater <-
+    lapply(ls.mnfld, function(mnfld) mnfld$dist(c(0, 0), c(0, pi/4)))
+  expect_equal(
+    arr.quater, list(
+      'geodetic' = 0.507765,
+      'geocentric' = 1.51926,
+      'parametric' = 0.965664
+    ), tolerance = 5e-5
+  )
+})
 
+test_that('Numeric stability of geodesic solver: spheroid', {
+
+  # this could take a while
+
+  d <- 2
+  for(lat in c('geodetic', 'geocentric', 'parametric')) {
+    manifold <- spaceSpheroid(d = d, latitude = lat)
+    geo.f <- getGeodesic(manifold$metric, d = d)
+    geo.dist <- getGeoDist(manifold$metric, d = d)
+
+    set.seed(1)
+    mat.p1 <- manifold$genPnt(20)
+    mat.p2 <- manifold$genPnt(20)
+    # don't go too far
+    idx.keep <- abs(mat.p1[, 1]) <= pi/3 & abs(mat.p2[, 1]) <= pi/3
+    mat.p1 <- mat.p1[idx.keep, ]
+    mat.p2 <- mat.p2[idx.keep, ]
+    # check geodesic distance
+    dist.true <- manifold$dist(mat.p1, mat.p2)
+    dist.numeric <- mapply(
+      geo.dist,
+      start.pnt = asplit(mat.p1, 1),
+      end.pnt = asplit(mat.p2, 1),
+      MoreArgs = list(
+        t = seq(0, 5, length.out = 100), nmax = 5e+3, atol = 1e-4
+        # , xguess = NULL, yguess = NULL
+      )
+    )
+    expect_equal(dist.numeric, dist.true, tolerance = 5e-5)
+    # (dist.numeric - dist.true)
+  }
+
+})

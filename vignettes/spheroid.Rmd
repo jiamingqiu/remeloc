@@ -1,0 +1,213 @@
+---
+title: "Spheroid"
+output: rmarkdown::html_vignette
+author: "Jiaming Qiu"
+date: "`r Sys.Date()`"
+vignette: >
+  %\VignetteIndexEntry{Spheroid}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+Here we provide an ellipsoid example to illustrate the proposed method also work for manifolds with non-constant curvature. For simplicity, we resort to spheroids, i.e., ellipsoids of revolution. We use the codes in the C++ library of `GeographicLib` to compute geodesic distance on spheroids based on the R library `geosphere`. We use the longitude--latitude coordinate as in geodesy, where the latitude is the geodetic latitude. A sidenote is that the coordinates are written in radian, which is different to `GeographicLib` and `geosphere` that use degree.
+
+```{r echo = F}
+library(foreach)
+# library(remeloc)
+devtools::load_all()
+library(tidyverse)
+d <- 2
+manifold <- spaceSpheroid(d, a = 2, b = 1, latitude = 'geodetic')
+coef.shrink <- 0.8 # to avoid being too close to the boundary
+local.reach <- 0.1
+```
+
+Generating data and graph, then plot some of the edges.
+
+```{r fig.width=6, fig.height=3}
+set.seed(1)
+obsv.coord <- manifold$genPnt(10^5)
+idx.edge <- genGraph(10^6, obsv.coord, local.reach = local.reach, exact = F)
+plt.dat <- plotGraph(obsv.coord, idx.edge, max.n.edge = 250) +
+  coord_fixed() + labs(y = 'geodetic latitude', x = 'longitude')
+plt.dat
+```
+
+Then we construct response by adding 1% of noise to the squared distance. 
+In the data frame, one row for one edge, where the last two columns are index of nodes correspond to this edge.
+
+```{r}
+# squared distance
+dat <- tibble(sqdist = manifold$dist(
+  obsv.coord[idx.edge[, 1], ], obsv.coord[idx.edge[, 2], ]
+) ^ 2)
+set.seed(42)
+dat <- dat %>% mutate(
+  noise = rnorm(length(sqdist), 0, sqrt(sqdist * 0.01)),
+  y = pmax(0, sqdist + noise)
+) %>% bind_cols(idx.edge %>% as.data.frame)
+names(dat) <- c('sqdist', 'noise', 'y', sprintf('p%s', seq(2)))
+dat %>% head
+```
+
+Next, "fit" a model, namely specify local regression structures. Here we specify that response "y" should be tied to nodes indexed by columns "p1" and "p2", coordinates of those nodes are supplied as well. Further, we require the algorithm to use no more than $10^4$ edges locally.
+
+```{r}
+fit <- fitMetric(
+  y ~ p1 : p2, 
+  data = dat, coord = obsv.coord, 
+  optns = list(n.local = 10^4, local.reach = 0.25, deriv = 1)
+)
+```
+
+Then we estimate metric tensor at targeted points using the model. This could take a while. Estimation here is done on a $128 \times 128$ grid.
+
+```{r}
+target <- manifold$genGrid(128) * coef.shrink 
+# parallel estimation
+system.time({
+  N.CORES <- 18
+  doParallel::registerDoParallel(cores = N.CORES)
+  ls.esti <- foreach(
+    w.target = split.data.frame(
+      target, # %>% head(2 * N.CORES), 
+      cut(seq(nrow(target)), N.CORES)
+    ),
+    # .export = 'fit',
+    .packages = 'remeloc', .errorhandling = 'pass'
+  ) %dopar% {
+    estiMetric(w.target, fit)
+  }
+  doParallel::stopImplicitCluster()
+})
+if(!any(sapply(ls.esti, inherits, what = 'error'))){
+  tm <- list()
+  for(nm in names(ls.esti[[1]])){
+    tm[[nm]] <- ls.esti %>% map(~ .x[[nm]]) %>% unlist(recursive = F)
+  }
+  ls.esti <- tm
+  rm(tm)
+}else{
+  stop('Error in parallel resluts.')
+}
+esti.metric <- ls.esti$metric
+esti.christ <- ls.esti$christ
+```
+
+
+Now we can inspect the estimated Riemannian metric tensor.
+First, inspect the component functions.
+
+```{r, fig.width=6.5, fig.height=5}
+df.esti.metric <- getMetricDF(target, esti.metric)
+df.true.metric <- getMetricDF(target, manifold$metric)
+map.esti <- df.esti.metric %>% mutate(what = 'esti') %>% 
+  bind_rows(df.true.metric %>% mutate(what = 'true')) %>% 
+  bind_rows(
+    left_join(df.true.metric %>% rename('true' = 'value'), df.esti.metric) %>% 
+      mutate(value = true - value, what = 'err') %>% select(-all_of('true'))
+  ) %>% 
+  filter(component != 'dx1dx2', what != 'err') %>%
+  # filter(what == 'err') %>%
+  ggplot() +
+  geom_raster(aes(x = x1, y = x2, fill = value)) +
+  scale_fill_gradientn(
+    colors = hcl.colors(10, 'Zissou 1'),
+    trans = scales::pseudo_log_trans(base = 10)
+  ) +
+  facet_wrap(what ~ component, labeller = label_both) +
+  coord_fixed() + labs(y = 'latitude', x = 'longitude')
+map.esti
+```
+
+We can also look at equal geodesic ellipses. The following ellipses are plotting
+$\{x: (x - p)^T G(p) (x - p) = c\}$ for given center point $p$ and metric tensor matrix $G(p)$. The constant $c$ is the prespecified geodesic distance to travel.
+
+```{r, fig.width=5, fig.height=3.5}
+colnames(target) <- c('x1', 'x2')
+df.ell <- getMetricEllipsoid(target, esti.metric, radius = 0.1, tissot = T) %>% 
+  mutate(what = 'esti') %>% bind_rows(getMetricEllipsoid(
+    target, apply(target, 1, manifold$metric, simplify = F), radius = 0.1
+  ) %>% mutate(what = 'true')) %>% 
+  mutate(what = factor(what, levels = c('true', 'esti')))
+# index the row and column of points
+idx.xy <- apply(target, 2, function(x) match(x, sort(unique(x))))
+idx.xy <- as.data.frame(idx.xy) %>% mutate(idx.pnt = row_number()) %>% 
+  setNames(c('idx.x', 'idx.y', 'idx.pnt')) %>% as_tibble
+df.ell <- df.ell %>% left_join(idx.xy, by = 'idx.pnt') %>% as_tibble
+
+map.ell <- df.ell %>% 
+  filter(idx.x %% 22 == 0, idx.y %% 22 == 0) %>% 
+  ggplot() + 
+  geom_path(aes(
+    x = x1, y = x2, linetype = what, color = what,
+    group = interaction(idx.pnt, what)
+  )) +
+  coord_fixed(ratio = 1) + labs(y = 'longitude', x = 'latitude')
+map.ell
+```
+
+Next, consider the geodesic curve. We first apply post-smoothing for ease of computation. Then construct functions computing geodesics w.r.t. the metric or Christoffel symbols.
+
+```{r}
+# post smoothing
+ps.metric.f <- approxfunHD(
+  target, esti.metric, bw = 0.5 * max(abs(target[1, ] - target[2, ]))
+  , method = 'smooth'
+)
+ps.christ.f <- approxfunHD(
+  target, esti.christ, 
+  bw = 0.5 * max(abs(target[1, ] - target[2, ])),
+  method = 'smooth'
+)
+geo.f.true <- getGeodesic(manifold$metric, d = d)
+geo.f.approx <- getGeodesic(christ = ps.christ.f, d = d)
+```
+
+The following shows the geodesic curve starting from $(0, 0)$ with initial velocity $(3, 3)$.
+```{r fig.width=6.5, fig.height=4}
+pt1 <- c(0, 0)
+init.v <- c(3, 3)
+init.args <- list(pt1, init.v = init.v)
+ode.args <- 
+  list(t = seq(0, 1, length.out = 100), nmax = 5e+3, atol = 1e-4)
+system.time({df.geo.init.v <- bind_rows(
+  do.call(geo.f.true, c(init.args, ode.args)) %>% 
+    as.data.frame %>% as_tibble %>% mutate(what = 'true'),
+  do.call(geo.f.approx, c(init.args, ode.args)) %>% 
+    as.data.frame %>% as_tibble %>% mutate(what = 'estimated')
+)})
+df.geo.init.v %>% ggplot() +
+  geom_path(aes(x = x1, y = x2, color = what)) +
+  labs(y = 'latitude', x = 'longitude') + coord_fixed()
+```
+
+The following shows the geodesic curve between from $(-\pi/4, -\pi/4)$ and $(\pi/4, \pi/4)$. 
+
+```{r fig.width=4, fig.height=4}
+pnt <- c(pi/4, pi/4)
+pt1 <- -pnt
+pt2 <- pnt
+# pt2 <- c(pi/5, pi/4)
+init.args <- list(pt1, end.pnt = pt2)
+ode.args <- 
+  list(nmax = 5e+3, atol = 1e-4)
+system.time({df.geo <- bind_rows(
+  do.call(geo.f.true, c(init.args, ode.args)) %>% 
+    as.data.frame %>% as_tibble %>% mutate(what = 'true'),
+  do.call(geo.f.approx, c(init.args, ode.args)) %>% 
+    as.data.frame %>% as_tibble %>% mutate(what = 'estimated')
+)})
+df.geo %>% ggplot() +
+  geom_path(aes(x = x1, y = x2, color = what)) +
+  labs(y = 'latitude', x = 'longitude') + coord_fixed()
+```
+
+

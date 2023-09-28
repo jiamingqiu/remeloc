@@ -1,7 +1,7 @@
 ### math functions
 
 
-##### model spaces: Euclidean, Sphere, and Poincare disk #######################
+# model spaces: Euclidean, Spheroid, and Poincare disk #########################
 
 # what is needed:
 #   coordinate system and random generator
@@ -9,6 +9,7 @@
 #   embedding into Euclidean space
 #   (maybe) exponential/logarithmic map
 
+## Euclidean space #####
 #' Euclidean space
 #'
 #' @param d dimension
@@ -60,6 +61,32 @@ spaceEuclidean <- function(d){
   ))
 
 }
+eucLine <- function(p1, p2, t = seq(0, 1, by = 0.01)) {
+  # straight line in Euclidean space
+  # from p1 to p2 on grid t
+  # output in the form of matrix w/ 1 row corr. to 1 time grid.
+  d <- length(p1)
+  stopifnot(length(p2) == d)
+
+  t.grid <- t
+
+  res <- matrix(0, ncol = 1 + 2 * d, nrow = length(t.grid))
+  res[, 1] <- t.grid
+  res[, 1 + seq(d)] <- sapply(seq(d), function(idx.d) {
+    approx(
+      x = range(t.grid),
+      y = c(p1[idx.d], p2[idx.d]),
+      xout = t.grid
+    )$y
+  })
+  res <- t(res)
+
+  res[1 + d + seq(d), ] <- (p2 - p1) / diff(range(t.grid))
+
+  return(t(res))
+}
+
+## Hyperbolic #####
 
 #' d-dimensional hyperbolic space
 #'
@@ -210,6 +237,8 @@ spaceHyperbolic <- function(d, r = 1, model = 'ball'){
 
 }
 
+## Spheroid #####
+
 #' d-dimensional sphere
 #'
 #' @param d dimension
@@ -356,7 +385,6 @@ spaceSphere <- function(d, r = 1, chart = 'stereographic'){
   ))
 
 }
-
 pol2cart <- function(x, theta, r){
 
   # transform polar coord -> cartesian in R^n, n >= 2.
@@ -423,6 +451,226 @@ cart2stereo <- function(x){
 # stereo2cart(rep(0, 2)) %>% cart2stereo
 # stereo2cart(rep(1, 2)) %>% cart2stereo
 
+#' d-dimensional Spheroid
+#'
+#' @param d dimension
+#' @param a semimajor axis
+#' @param b semiminor axis
+#' @param f flattening
+#' @param latitude \code{"parametric"}, \code{"geodetic"},
+#' or \code{"geocentric"}: which type of latitude to use
+#'
+#' @return a list
+#' @details Dimension \code{d} can only be \code{2}.
+#' The coordinates are longitude--latitude. We modify codes from the R
+#' package \code{geosphere} to use the \code{GeoGraphicLib} C++ library for
+#' distance computation.
+#' The flattening should satisfies \eqn{f = (a - b) / a}.
+#' Geodetic latitude \eqn{\varphi} is the angle between the equator and the
+#' normal vector, which is most common in geodesy.
+#' Parametric latitude \eqn{\beta} is used in the parameterization of the
+#' spheroids.
+#' Geocentric latitude \eqn{\theta} is similar to polar angle in the spherical
+#' coordinate but measures angle to the equator. These latitudes are connect via
+#' \deqn{\tan\beta = (1 - f) \tan\varphi, }
+#' \deqn{\tan\theta = (1 - f)^2 \tan\varphi,}
+#' for \eqn{-\pi / 2 < \varphi, \beta, \theta < \pi / 2}.
+#'
+#' We set the 1st coordinate to latitude and the 2nd to longitude.
+#'
+#' @examples
+#' d <- 2
+#' manifold <- spaceSpheroid(d = d, latitude = 'geodetic')
+#' # manifold <- spaceSpheroid(d = d, latitude = 'parametric')
+#' # manifold <- spaceSpheroid(d = d, latitude = 'geocentric')
+#' manifold$dist(c(0, 0), c(pi/4, 0))
+#' pi_scales <- scales::math_format(.x * pi, format = function(x) x / pi)
+#' df.ell <- with(manifold, {
+#'   getMetricEllipsoid(genGrid(7), metric, radius = 0.085)
+#' })
+#' head(df.ell)
+#' ggplot2::ggplot(df.ell, ggplot2::aes(x, y, group = idx.pnt)) +
+#'   ggplot2::geom_path() + ggplot2::coord_fixed(ylim = c(0, 2 * pi)) +
+#'   ggplot2::geom_path(
+#'     data = as.data.frame(
+#'       getGeodesic(manifold$metric, d = d)(c(-1, 0), init.v = c(0, 8))
+#'     ),
+#'     mapping = ggplot2::aes(x1, x2), color = 'red', inherit.aes = F
+#'   ) +
+#'   ggplot2::geom_path(
+#'     data = as.data.frame(
+#'       getGeodesic(manifold$metric, d = d)(c(0, 0), init.v = c(0, 6))
+#'     ),
+#'     mapping = ggplot2::aes(x1, x2), color = 'green', inherit.aes = F
+#'   ) +
+#'   ggplot2::labs(
+#'     subtitle = 'x = 0 is equator, x = +-pi/2 are north and south pole.'
+#'   ) +
+#'  ggplot2::scale_x_continuous(
+#'    labels = pi_scales, breaks = seq(-pi / 2, pi / 2, pi / 4)
+#'  ) +
+#'  ggplot2::scale_y_continuous(
+#'    labels = pi_scales, breaks = seq(-pi, pi, pi / 4)
+#'  )
+spaceSpheroid <- function(d = 2, a = 2,b = 1,f = 0.5, latitude = 'parametric'){
+
+  # d-dimensional spheroid
+  if(missing(a))
+    a <- b / (1 - f)
+  if(missing(b))
+    b <- (1 - f) * a
+  if(missing(f))
+    f <- (a - b) / a
+  stopifnot(all.equal(f, (a - b) / a))
+  stopifnot(f < 1)
+
+  stopifnot(d == 2) # for the time being
+
+  latitude <- match.arg(latitude, c('parametric', 'geodetic', 'geocentric'))
+
+  if(latitude == 'parametric'){
+
+    # metric tensor
+    metric <- function(x){
+      # x in lat-lon
+      x <- as.numeric(x)
+      beta <- x[2]
+      lambda <- x[1]
+      return(diag(c(
+        a^2 * cos(beta)^2, a^2 * sin(beta)^2 + b^2 * cos(beta)^2
+      )))
+    }
+
+    # parametric latitude to geodetic latitude
+    lat2geodetic <- function(lat) {
+      phi <- atan(tan(lat) / (1 - f))
+      # polar points
+      idx.polar <- lat %% (pi/2) == 0
+      arr.polar <- sign(lat[idx.polar]) * pi / 2
+      phi[idx.polar] <- arr.polar
+      return(phi)
+    }
+
+  }else if (latitude == 'geodetic'){
+
+    # metric tensor
+    metric <- function(x){
+      # x in lat-lon
+      x <- as.numeric(x)
+      phi <- x[2]
+      lambda <- x[1]
+      return(diag(c(
+        a^4 / (a^2 + b^2 * tan(phi)^2),
+        (a * b)^4 / (a^2 * cos(phi)^2 + b^2 * sin(phi)^2) ^ 3
+      )))
+    }
+
+    # geodetic latitude no need to change
+    lat2geodetic <- function(lat) {
+      return(lat)
+    }
+
+  }else if (latitude == 'geocentric'){
+
+    # metric tensor
+    metric <- function(x){
+      # x in lat-lon
+      x <- as.numeric(x)
+      theta <- x[2]
+      lambda <- x[1]
+      term1 <- tan(theta)^2
+      term2 <- b^4 + a^4 * term1
+      term3 <- b^2 + a^2 * term1
+
+      return(diag((a*b)^2 * c(
+        1 / term3,
+        1 / cos(theta)^4 * term2 / term3^3
+      )))
+    }
+
+    # geocentric latitude to geodetic latitude
+    lat2geodetic <- function(lat) {
+      phi <- atan(tan(lat) / (1 - f)^2)
+      # polar points
+      idx.polar <- lat %% (pi/2) == 0
+      arr.polar <- sign(lat[idx.polar]) * pi / 2
+      phi[idx.polar] <- arr.polar
+      return(phi)
+    }
+
+  }
+
+  genGrid <- function(n){
+    # give a grid with equally spaced (in coordinates) n^d points
+    stopifnot(n > 0)
+    grid.margin <- seq(-1L, 1L, length.out = n)
+    grid <- expand.grid(pi * grid.margin, pi/2 * grid.margin)
+    grid <- as.matrix(grid)
+    colnames(grid) <- NULL
+    return(grid)
+  }
+  genPnt <- function(n){
+    # random point generator, returns a matrix, one row = one point
+    stopifnot(n > 0)
+    return(matrix(
+      c(runif(n, -pi, pi), runif(n, -pi/2, pi/2)),
+      ncol = 2, nrow = n
+    ))
+  }
+  # geodesic distance
+  dist <- function(x, y){
+    # function to compute geodesic distance on spheriod
+    # x, y in lat-lon, one row for one point
+
+    if(!is.matrix(x)) x <- matrix(x, nrow = 1)
+    if(!is.matrix(y)) y <- matrix(y, nrow = 1)
+    stopifnot(all(dim(x) == dim(y)))
+    stopifnot(ncol(x) == d)
+
+    # translate to geodetic latitude and compute
+    x[, 2] <- lat2geodetic(x[, 2])
+    y[, 2] <- lat2geodetic(y[, 2])
+    x[, 1] <- x[, 1] %% (2 * pi)
+    y[, 1] <- y[, 1] %% (2 * pi)
+    phi.x <- rad2deg(x)
+    phi.y <- rad2deg(y)
+    return(
+      distSpheroid(
+        lat1 = phi.x[, 2], lon1 = phi.x[, 1],
+        lat2 = phi.y[, 2], lon2 = phi.y[, 1],
+        a = a, f = f
+      )
+    )
+  }
+
+  return(list(
+    genPnt = genPnt, genGrid = genGrid, metric = metric, dist = dist
+    # , lat2geodetic = lat2geodetic
+  ))
+
+}
+
+distSpheroid <- function(lat1, lon1, lat2, lon2, a, f) {
+  # wrapper over .inversegeodesic
+  # args(.inversegeodesic)
+  stopifnot(length(lat1) == length(lon1))
+  stopifnot(length(lat1) == length(lat2))
+  stopifnot(length(lat1) == length(lon2))
+  stopifnot(a > 0 & f < 1)
+  r <- .inversegeodesic(
+    as.double(lon1), as.double(lat1),
+    as.double(lon2), as.double(lat2),
+    as.double(a), as.double(f)
+  )
+  r <- matrix(r, ncol=3, byrow=TRUE)
+  return(r[, 1])
+}
+
+rad2deg <- function(rad) {
+  # radian to degree
+  return(rad / pi * 180)
+}
+
 # likely no need
 locDist <- function(coord, dist, local.reach){
   # get some idea about magnitude of local distance
@@ -436,32 +684,7 @@ locDist <- function(coord, dist, local.reach){
 
 }
 
-eucLine <- function(p1, p2, t = seq(0, 1, by = 0.01)) {
-  # straight line in Euclidean space
-  # from p1 to p2 on grid t
-  # output in the form of matrix w/ 1 row corr. to 1 time grid.
-  d <- length(p1)
-  stopifnot(length(p2) == d)
-
-  t.grid <- t
-
-  res <- matrix(0, ncol = 1 + 2 * d, nrow = length(t.grid))
-  res[, 1] <- t.grid
-  res[, 1 + seq(d)] <- sapply(seq(d), function(idx.d) {
-    approx(
-      x = range(t.grid),
-      y = c(p1[idx.d], p2[idx.d]),
-      xout = t.grid
-    )$y
-  })
-  res <- t(res)
-
-  res[1 + d + seq(d), ] <- (p2 - p1) / diff(range(t.grid))
-
-  return(t(res))
-}
-
-##### Riemannian geometry related functions ####################################
+# Riemannian geometry related functions ########################################
 
 #' Compute geodesic distance
 #'
